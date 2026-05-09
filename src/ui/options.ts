@@ -1,6 +1,7 @@
 import type { LocalProviderSnapshot, ProviderOptionDescriptor, ServerProviderModel, TuiMode } from "../provider.ts";
 import type { LocalSessionState, OptionSelectionValue, PickerKind, PickerOption } from "../types.ts";
 import { formatLastTime } from "./sessionList.ts";
+import type { ThemeSummary } from "./theme.ts";
 
 export function detectPickerKind(input: string): PickerKind | null {
   const trimmed = input.trimStart();
@@ -11,6 +12,7 @@ export function detectPickerKind(input: string): PickerKind | null {
   if (command === "") return "slash";
   if (command === "provider") return "provider";
   if (command === "model") return "model";
+  if (command === "theme") return "theme";
   if (command === "mode") return "mode";
   if (command === "options") return "options";
   if (command === "sessions") return "sessions";
@@ -21,6 +23,7 @@ export function detectPickerKind(input: string): PickerKind | null {
   }
   if (!hasCommandSpace && "provider".startsWith(command)) return "slash";
   if (!hasCommandSpace && "model".startsWith(command)) return "slash";
+  if (!hasCommandSpace && "theme".startsWith(command)) return "slash";
   if (!hasCommandSpace && "mode".startsWith(command)) return "slash";
   if (!hasCommandSpace && "options".startsWith(command)) return "slash";
   if (!hasCommandSpace && "sessions".startsWith(command)) return "slash";
@@ -51,6 +54,7 @@ export function slashOptions(
   const options: PickerOption[] = [
     { label: "/provider", value: "provider", description: "Switch between local provider CLIs" },
     { label: "/model", value: "model", description: "Choose a model from the selected provider" },
+    { label: "/theme", value: "theme", description: "Preview and apply an interface theme" },
     { label: "/options", value: "options", description: "Edit options for the selected model" },
     { label: "/new", value: "new", description: "Start a new empty local session" },
     { label: "/sessions", value: "sessions", description: "Switch between local sessions" },
@@ -169,6 +173,25 @@ export function modelOptions(models: ServerProviderModel[]): PickerOption[] {
   }));
 }
 
+export function themeOptions(
+  themes: ReadonlyArray<ThemeSummary>,
+  currentThemeId: string,
+  input: string,
+): PickerOption[] {
+  const query = commandArgumentQuery(input, "theme");
+  return themes
+    .filter((theme) => {
+      if (!query) return true;
+      const normalized = query.toLowerCase();
+      return theme.id.toLowerCase().includes(normalized) || theme.name.toLowerCase().includes(normalized);
+    })
+    .map((theme) => ({
+      label: theme.name,
+      value: theme.id,
+      description: theme.id === currentThemeId ? `${theme.id} · current` : theme.id,
+    }));
+}
+
 export function sessionOptions(
   sessions: ReadonlyArray<LocalSessionState>,
   activeSessionId: string,
@@ -246,6 +269,8 @@ export function pickerTitle(
       return "Providers";
     case "model":
       return "Models";
+    case "theme":
+      return "Themes";
     case "mode":
       return "Modes";
     case "sessions":
@@ -257,4 +282,11 @@ export function pickerTitle(
     case "options":
       return activeOptionDescriptor?.label ?? "Options";
   }
+}
+
+function commandArgumentQuery(input: string, command: string): string {
+  const trimmed = input.trimStart();
+  const prefix = `/${command}`;
+  if (!trimmed.startsWith(prefix)) return "";
+  return trimmed.slice(prefix.length).trim().toLowerCase();
 }

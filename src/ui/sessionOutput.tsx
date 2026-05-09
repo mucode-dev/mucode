@@ -1,7 +1,7 @@
 import type { SessionCodeBlock } from "../session.ts";
 import type { LocalSessionState, SessionWorkBlock } from "../types.ts";
-import { codeHighlightChunks, normalizeSyntaxFiletype, renderMarkdownNode } from "./codeHighlight.ts";
-import { OUTPUT_SYNTAX_STYLE } from "./theme.ts";
+import { createCodeHighlighter, createMarkdownNodeRenderer, normalizeSyntaxFiletype } from "./codeHighlight.ts";
+import type { AppTheme } from "./theme.ts";
 import {
   displaySessionOutput,
   executionBlockTitle,
@@ -16,6 +16,7 @@ interface SessionOutputOptions {
 
 export function renderSessionOutput(
   session: LocalSessionState | undefined,
+  theme: AppTheme,
   options: SessionOutputOptions = {},
 ) {
   const content = displaySessionOutput(session?.output);
@@ -27,10 +28,11 @@ export function renderSessionOutput(
       if (!part) return null;
       return splitLegacyWorkSegments(part).map((segment, segmentIndex) =>
         segment.kind === "legacy-work"
-          ? renderWorkBlock(segment.block, `legacy-${index}-${segmentIndex}`, options.showWorkDetails)
+          ? renderWorkBlock(segment.block, `legacy-${index}-${segmentIndex}`, theme, options.showWorkDetails)
           : renderMarkdownPart(
               segment.content,
               `markdown-${index}-${segmentIndex}`,
+              theme,
               session?.status === "running" && index === parts.length - 1,
             ),
       );
@@ -41,46 +43,46 @@ export function renderSessionOutput(
       if (!blockId) return null;
       const block = session?.workBlocks?.[blockId];
       if (!block) return null;
-      return renderWorkBlock(block, blockId, options.showWorkDetails);
+      return renderWorkBlock(block, blockId, theme, options.showWorkDetails);
     }
 
     const blockId = codeMatch?.[1];
     if (!blockId) return null;
     const block = session?.codeBlocks?.[blockId];
     if (!block) return null;
-    return renderExecutionCodeBlock(block, blockId);
+    return renderExecutionCodeBlock(block, blockId, theme);
   });
 }
 
-function renderMarkdownPart(content: string, key: string, streaming: boolean) {
+function renderMarkdownPart(content: string, key: string, theme: AppTheme, streaming: boolean) {
   if (!content.trim()) return null;
   return (
     <markdown
       key={key}
       content={content}
-      syntaxStyle={OUTPUT_SYNTAX_STYLE}
-      fg="#E2E8F0"
+      syntaxStyle={theme.syntaxStyle}
+      fg={theme.text}
       streaming={streaming}
       conceal
       concealCode
       internalBlockMode={streaming ? "top-level" : "coalesced"}
-      renderNode={renderMarkdownNode}
+      renderNode={createMarkdownNodeRenderer(theme)}
       tableOptions={{
         style: "columns",
         widthMode: "content",
         columnFitter: "balanced",
         wrapMode: "word",
-        borderColor: "#475569",
+        borderColor: theme.border,
         selectable: true,
       }}
     />
   );
 }
 
-function renderWorkBlock(block: SessionWorkBlock, blockId: string, showDetails = false) {
+function renderWorkBlock(block: SessionWorkBlock, blockId: string, theme: AppTheme, showDetails = false) {
   const detailLines = workDetailLines(block.detail);
   const summary = workBlockSummary(block, detailLines);
-  const accent = statusColor(block.status);
+  const accent = statusColor(block.status, theme);
 
   return (
     <box
@@ -92,9 +94,9 @@ function renderWorkBlock(block: SessionWorkBlock, blockId: string, showDetails =
     >
       <box flexDirection="row" gap={1}>
         <text fg={accent}>{workStatusPrefix(block.status)}</text>
-        <text fg="#E2E8F0">{summary.title}</text>
+        <text fg={theme.text}>{summary.title}</text>
         {summary.meta.map((item, index) => (
-          <text key={`${blockId}-meta-${index}`} fg={index === 0 ? "#94A3B8" : "#64748B"}>
+          <text key={`${blockId}-meta-${index}`} fg={index === 0 ? theme.textMuted : theme.textDim}>
             {item}
           </text>
         ))}
@@ -106,14 +108,14 @@ function renderWorkBlock(block: SessionWorkBlock, blockId: string, showDetails =
           padding={1}
           marginTop={1}
           gap={0}
-          backgroundColor="#111827"
+          backgroundColor={theme.inputBackground}
         >
           {detailLines.slice(0, 6).map((line, lineIndex) => (
-            <text key={`${blockId}-detail-${lineIndex}`} fg="#94A3B8">
+            <text key={`${blockId}-detail-${lineIndex}`} fg={theme.textMuted}>
               {line}
             </text>
           ))}
-          {block.code ? renderExecutionCodePreview(block.code, `${blockId}-preview`) : null}
+          {block.code ? renderExecutionCodePreview(block.code, `${blockId}-preview`, theme) : null}
         </box>
       ) : null}
     </box>
@@ -295,49 +297,49 @@ function workStatusPrefix(status: SessionWorkBlock["status"] | undefined): strin
   }
 }
 
-function renderExecutionCodePreview(block: SessionCodeBlock, blockId: string) {
+function renderExecutionCodePreview(block: SessionCodeBlock, blockId: string, theme: AppTheme) {
   const maxLines = 10;
   const lines = block.content.split("\n");
   const clipped = lines.length > maxLines;
   const content = clipped
     ? `${lines.slice(0, maxLines).join("\n")}\n... +${lines.length - maxLines} lines`
     : block.content;
-  return renderExecutionCodeBlock({ ...block, content }, blockId);
+  return renderExecutionCodeBlock({ ...block, content }, blockId, theme);
 }
 
-function renderExecutionCodeBlock(block: SessionCodeBlock, blockId: string) {
+function renderExecutionCodeBlock(block: SessionCodeBlock, blockId: string, theme: AppTheme) {
   return (
     <box key={`code-${blockId}`} flexDirection="column" marginTop={1} marginBottom={1} gap={0}>
       <box flexDirection="row" gap={2} marginBottom={1}>
-        <text fg={block.kind === "diff" ? "#A7F3D0" : "#93C5FD"}>
+        <text fg={block.kind === "diff" ? theme.diffAdded : theme.selectionBackground}>
           {executionBlockTitle(block)}
         </text>
-        {block.filetype ? <text fg="#94A3B8">{block.filetype}</text> : null}
+        {block.filetype ? <text fg={theme.textMuted}>{block.filetype}</text> : null}
       </box>
       {block.kind === "diff" ? (
         <diff
           diff={block.content}
           filetype={normalizeSyntaxFiletype(block.filetype)}
-          syntaxStyle={OUTPUT_SYNTAX_STYLE}
+          syntaxStyle={theme.syntaxStyle}
           treeSitterClient={undefined}
           view="unified"
           wrapMode="word"
           showLineNumbers
           conceal
-          lineNumberFg="#64748B"
-          addedBg="#06381D"
-          removedBg="#3A1216"
-          addedContentBg="#052E16"
-          removedContentBg="#331015"
-          addedSignColor="#22C55E"
-          removedSignColor="#F87171"
+          lineNumberFg={theme.textDim}
+          addedBg={theme.diffAddedBackground}
+          removedBg={theme.diffRemovedBackground}
+          addedContentBg={theme.diffAddedContentBackground}
+          removedContentBg={theme.diffRemovedContentBackground}
+          addedSignColor={theme.diffAdded}
+          removedSignColor={theme.diffRemoved}
         />
       ) : (
         <code
           content={block.content}
           filetype={normalizeSyntaxFiletype(block.filetype)}
-          syntaxStyle={OUTPUT_SYNTAX_STYLE}
-          onChunks={codeHighlightChunks}
+          syntaxStyle={theme.syntaxStyle}
+          onChunks={createCodeHighlighter(theme)}
           wrapMode="word"
           conceal
           drawUnstyledText

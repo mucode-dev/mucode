@@ -32,6 +32,7 @@ export interface PersistedState {
     providerId: string;
     modelSlug: string;
     mode: TuiMode;
+    themeId: string;
     optionSelections: Record<string, string | boolean>;
   };
   sessions: PersistedSession[];
@@ -50,6 +51,7 @@ export function createDefaultPersistedState(now = Date.now()): PersistedState {
       providerId: "codex",
       modelSlug: "gpt-5.4",
       mode: "build",
+      themeId: "opencode",
       optionSelections: {},
     },
     sessions: [],
@@ -169,6 +171,8 @@ function readLegacyDbSettings(db: Database): Partial<PersistedState> | null {
     .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'")
     .get();
   if (!tableExists) return null;
+  const legacyColumns = db.query("PRAGMA table_info(app_settings)").all() as Array<{ name: string }>;
+  const hasThemeId = legacyColumns.some((column) => column.name === "theme_id");
 
   const row = db
     .query(
@@ -178,6 +182,7 @@ function readLegacyDbSettings(db: Database): Partial<PersistedState> | null {
         provider_id AS providerId,
         model_slug AS modelSlug,
         mode,
+        ${hasThemeId ? "theme_id" : "NULL"} AS themeId,
         option_selections_json AS optionSelectionsJson
       FROM app_settings
       WHERE id = 1`,
@@ -189,6 +194,7 @@ function readLegacyDbSettings(db: Database): Partial<PersistedState> | null {
         providerId: string;
         modelSlug: string;
         mode: TuiMode;
+        themeId?: string;
         optionSelectionsJson: string;
       }
     | null;
@@ -200,12 +206,13 @@ function readLegacyDbSettings(db: Database): Partial<PersistedState> | null {
     activeSessionId: row.activeSessionId,
     sidebarOpen: row.sidebarOpen === 1,
     settings: {
-      providerId: row.providerId,
-      modelSlug: row.modelSlug,
-      mode: row.mode,
-      optionSelections: parseOptionSelections(row.optionSelectionsJson),
-    },
-  };
+        providerId: row.providerId,
+        modelSlug: row.modelSlug,
+        mode: row.mode,
+        themeId: row.themeId ?? createDefaultPersistedState().settings.themeId,
+        optionSelections: parseOptionSelections(row.optionSelectionsJson),
+      },
+    };
 }
 
 function readSessions(db: Database): PersistedSession[] {
@@ -382,6 +389,7 @@ function normalizePersistedState(input: Partial<PersistedState>): PersistedState
       providerId: isProviderId(settings.providerId) ? settings.providerId : fallback.settings.providerId,
       modelSlug: typeof settings.modelSlug === "string" ? settings.modelSlug : fallback.settings.modelSlug,
       mode: settings.mode === "plan" ? "plan" : "build",
+      themeId: typeof settings.themeId === "string" && settings.themeId ? settings.themeId : fallback.settings.themeId,
       optionSelections: isRecord(settings.optionSelections) ? coerceOptionSelections(settings.optionSelections) : {},
     },
     sessions,

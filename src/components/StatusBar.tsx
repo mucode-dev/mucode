@@ -1,7 +1,7 @@
 import type { LocalProviderSnapshot, ServerProviderModel, TuiMode } from "../provider.ts";
 import type { OptionSelectionValue } from "../types.ts";
 import type { TokenUsageSnapshot } from "../session.ts";
-import { PANEL_PADDING } from "../ui/theme.ts";
+import { type AppTheme, PANEL_PADDING } from "../ui/theme.ts";
 
 interface StatusBarProps {
   activeContextLabel: string;
@@ -15,6 +15,7 @@ interface StatusBarProps {
   selectedModel: ServerProviderModel | undefined;
   selectedProvider: LocalProviderSnapshot | undefined;
   status: string;
+  theme: AppTheme;
   workingDirectory: string;
 }
 
@@ -30,6 +31,7 @@ export function StatusBar({
   selectedModel,
   selectedProvider,
   status,
+  theme,
   workingDirectory,
 }: StatusBarProps) {
   return (
@@ -37,22 +39,22 @@ export function StatusBar({
       <box width={PANEL_PADDING} />
       <box flexDirection="row" justifyContent="space-between" flexGrow={1}>
         <box flexDirection="row" gap={2}>
-          <text fg="#94A3B8">{selectedProvider?.displayName ?? providerId}</text>
-          <text fg="#94A3B8">{selectedModel?.name ?? modelSlug}</text>
-          <text fg="#94A3B8">{activeContextLabel}</text>
-          {activeContextUsage.compactsAutomatically ? <text fg="#94A3B8">auto-compact</text> : null}
-          <text fg="#94A3B8">
+          <text fg={theme.textMuted}>{selectedProvider?.displayName ?? providerId}</text>
+          <text fg={theme.textMuted}>{selectedModel?.name ?? modelSlug}</text>
+          <text fg={theme.textMuted}>{activeContextLabel}</text>
+          {activeContextUsage.compactsAutomatically ? <text fg={theme.textMuted}>auto-compact</text> : null}
+          <text fg={theme.textMuted}>
             {Object.entries(optionSelections)
               .map(([id, value]) => `${id}:${value}`)
               .join(" ")}
           </text>
-          <text fg="#94A3B8">{mode}</text>
-          <text fg="#94A3B8">{status}</text>
-          {pathReadyToConfirm ? <text fg="#94A3B8">Enter to confirm</text> : null}
+          <text fg={theme.textMuted}>{mode}</text>
+          <text fg={theme.textMuted}>{status}</text>
+          {pathReadyToConfirm ? <text fg={theme.textMuted}>Enter to confirm</text> : null}
         </box>
         <box flexDirection="row" gap={2}>
-          {log ? <text fg="#94A3B8">{log}</text> : null}
-          <text fg="#94A3B8">{workingDirectory}</text>
+          {log ? <text fg={theme.textMuted}>{log}</text> : null}
+          <text fg={theme.textMuted}>{workingDirectory}</text>
         </box>
       </box>
       <box width={PANEL_PADDING} />

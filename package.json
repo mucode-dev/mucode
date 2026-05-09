@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "bun run dev.tsx",
     "start": "bun run src/index.tsx",
+    "benchmark:setup": "uv tool install terminal-bench && uv tool update-shell",
+    "benchmark": "uvx terminal-bench run --dataset terminal-bench-core==0.1.1",
+    "benchmark:local": "uvx terminal-bench run --dataset-path tasks",
+    "benchmark:core": "uvx terminal-bench run --dataset terminal-bench-core==0.1.1",
     "typecheck": "bunx tsc --noEmit"
   },
   "devDependencies": {

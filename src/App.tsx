@@ -16,11 +16,11 @@ import { SharedSessionProvider, useMaybeSharedSession, useSharedSession } from "
 import { loadPersistedState, savePersistedState } from "./storage.ts";
 import type { LocalSessionState, OptionSelectionValue, PickerOption } from "./types.ts";
 import { deriveContextUsage, formatContextUsage, modelContextWindow } from "./ui/context.ts";
-import { defaultOptionSelections, descriptorOptions, detectPickerKind, modeOptions, modelOptions, providerOptions, sessionOptions, slashOptions } from "./ui/options.ts";
+import { defaultOptionSelections, descriptorOptions, detectPickerKind, modeOptions, modelOptions, providerOptions, sessionOptions, slashOptions, themeOptions } from "./ui/options.ts";
 import { commonPrefixLength, parsePathCommand, pathInputForOption, pathOptions, resolveWorkingDirectory } from "./ui/path.ts";
 import { renderSessionOutput } from "./ui/sessionOutput.tsx";
-import { APP_BACKGROUND, INPUT_BACKGROUND, PANEL_BACKGROUND, PANEL_GAP, PANEL_PADDING } from "./ui/theme.ts";
-import { closeActiveStreamFence, escapeMarkdownInline, formatStreamDelta, streamFenceLanguage, streamHeading, workBlockMarker } from "./ui/transcript.ts";
+import { AVAILABLE_THEMES, PANEL_GAP, PANEL_PADDING, resolveAppTheme } from "./ui/theme.ts";
+import { closeActiveStreamFence, codeBlockMarker, escapeMarkdownInline, formatStreamDelta, streamFenceLanguage, streamHeading, workBlockMarker } from "./ui/transcript.ts";
 
 function isCompactCommand(input: string): boolean {
   return /^\/compact(?:\s*)$/u.test(input.trim());
@@ -78,6 +78,7 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
   const renderer = useRenderer();
   const [providers, setProviders] = useState<LocalProviderSnapshot[]>([]);
   const [loadingProviders, setLoadingProviders] = useState(true);
+  const [previewThemeId, setPreviewThemeId] = useState<string | null>(null);
   const {
     input,
     setInput,
@@ -87,6 +88,8 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
     setProviderId,
     modelSlug,
     setModelSlug,
+    themeId,
+    setThemeId,
     selectedIndex,
     setSelectedIndex,
     log,
@@ -121,6 +124,7 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
       if (!alive) return;
       setProviderId(state.settings.providerId);
       setModelSlug(state.settings.modelSlug);
+      setThemeId(state.settings.themeId);
       setMode(state.settings.mode);
       setOptionSelections(state.settings.optionSelections);
       setSessions(state.sessions);
@@ -144,6 +148,7 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
         providerId,
         modelSlug,
         mode,
+        themeId,
         optionSelections,
       },
       sessions,
@@ -155,7 +160,7 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
       persistenceTimerRef.current = null;
       void savePersistedState(state);
     }, 250);
-  }, [activeSessionId, mode, modelSlug, optionSelections, providerId, sessions, sidebarOpen]);
+  }, [activeSessionId, mode, modelSlug, optionSelections, providerId, sessions, sidebarOpen, themeId]);
 
   useEffect(() => {
     return () => {
@@ -249,6 +254,7 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
   const pathPreviewPrefixLength = showingPathPreview
     ? commonPrefixLength(pathCompletionAnchor, input)
     : 0;
+  const activeTheme = useMemo(() => resolveAppTheme(previewThemeId ?? themeId), [previewThemeId, themeId]);
 
   const options = useMemo(() => {
     switch (pickerKind) {
@@ -262,6 +268,8 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
         return providerOptions(providers);
       case "model":
         return modelOptions(selectedProvider?.models ?? []);
+      case "theme":
+        return themeOptions(AVAILABLE_THEMES, themeId, input);
       case "mode":
         return modeOptions(mode);
       case "options":
@@ -317,9 +325,22 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
     selectedProvider,
     sessions,
     sidebarOpen,
+    themeId,
     pathCompletionAnchor,
     devActions,
   ]);
+  const activeThemePreview =
+    pickerKind === "theme" && options[selectedIndex]
+      ? resolveAppTheme(options[selectedIndex]?.value)
+      : activeTheme;
+
+  useEffect(() => {
+    if (pickerKind !== "theme") {
+      setPreviewThemeId(null);
+      return;
+    }
+    setPreviewThemeId(options[selectedIndex]?.value ?? themeId);
+  }, [options, pickerKind, selectedIndex, themeId]);
 
   useEffect(() => {
     const firstSelectableIndex = options.findIndex((option) => !option.disabled);
@@ -395,7 +416,10 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
           ? Object.entries(session.workBlocks ?? {}).find(([, block]) => block.eventId === event.id)
           : undefined;
         const blockId = existingEntry?.[0] ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const codeBlockId = `${blockId}-code`;
         const previousBlock = existingEntry?.[1];
+        const hadCodeBlock = Boolean(session.codeBlocks?.[codeBlockId]);
+        const shouldAttachCodeBlock = Boolean(event.code);
         const nextBlock = {
           ...(previousBlock ?? {}),
           ...(event.id ? { eventId: event.id } : {}),
@@ -406,9 +430,17 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
         };
         return {
           ...session,
-          output: existingEntry
-            ? session.output
-            : `${session.output}${closeActiveStreamFence(session.activeStreamKind)}${workBlockMarker(blockId)}`,
+          output:
+            session.output +
+            (!existingEntry ? `${closeActiveStreamFence(session.activeStreamKind)}${workBlockMarker(blockId)}` : "") +
+            (shouldAttachCodeBlock && !hadCodeBlock ? codeBlockMarker(codeBlockId) : ""),
+          codeBlocks:
+            shouldAttachCodeBlock
+              ? {
+                  ...(session.codeBlocks ?? {}),
+                  [codeBlockId]: event.code!,
+                }
+              : session.codeBlocks,
           workBlocks: {
             ...(session.workBlocks ?? {}),
             [blockId]: nextBlock,
@@ -462,6 +494,10 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
       if (option.value === "options") {
         openFirstModelOption(selectedModel);
         setInput("");
+        return;
+      }
+      if (option.value === "theme") {
+        setInput("/theme ");
         return;
       }
       if (option.value === "sessions") {
@@ -567,6 +603,14 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
       setMode(option.value as TuiMode);
       setInput("");
       setActiveOptionIndex(null);
+      return;
+    }
+    if (pickerKind === "theme") {
+      setThemeId(option.value);
+      setPreviewThemeId(null);
+      setInput("");
+      setActiveOptionIndex(null);
+      setLog(`Theme: ${option.label}`);
       return;
     }
     if (pickerKind === "sessions") {
@@ -816,13 +860,15 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
       flexGrow={1}
       padding={PANEL_GAP}
       gap={PANEL_GAP}
-      backgroundColor={APP_BACKGROUND}
+      backgroundColor={activeTheme.appBackground}
     >
       <box flexDirection="row" flexGrow={1}>
-        {sidebarOpen ? <SessionSidebar activeSessionId={activeSessionId} sessions={sidebarSessions} /> : null}
+        {sidebarOpen ? (
+          <SessionSidebar activeSessionId={activeSessionId} sessions={sidebarSessions} theme={activeTheme} />
+        ) : null}
         {sidebarOpen ? <box width={PANEL_GAP} /> : null}
 
-        <box flexDirection="column" flexGrow={1} backgroundColor={PANEL_BACKGROUND}>
+        <box flexDirection="column" flexGrow={1} backgroundColor={activeTheme.panelBackground}>
           <box flexGrow={1} flexDirection="column">
             {pickerKind ? (
               <PickerPanel
@@ -830,21 +876,23 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
                 options={options}
                 pickerKind={pickerKind}
                 selectedIndex={selectedIndex}
+                theme={activeTheme}
+                themePreview={activeThemePreview}
               />
             ) : (
-              <box flexGrow={1} padding={PANEL_PADDING} backgroundColor={PANEL_BACKGROUND}>
+              <box flexGrow={1} padding={PANEL_PADDING} backgroundColor={activeTheme.panelBackground}>
                 <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
-                  {renderSessionOutput(activeSession, { showWorkDetails: showToolDetails })}
+                  {renderSessionOutput(activeSession, activeTheme, { showWorkDetails: showToolDetails })}
                 </scrollbox>
               </box>
             )}
           </box>
 
-          <box padding={PANEL_PADDING} height={3} backgroundColor={INPUT_BACKGROUND}>
+          <box padding={PANEL_PADDING} height={3} backgroundColor={activeTheme.inputBackground}>
             {showingPathPreview ? (
               <box flexDirection="row">
-                <text fg="#F8FAFC">{input.slice(0, pathPreviewPrefixLength)}</text>
-                <text fg="#0F172A" bg="#FDE68A">
+                <text fg={activeTheme.textStrong}>{input.slice(0, pathPreviewPrefixLength)}</text>
+                <text fg={activeTheme.selectionForeground} bg={activeTheme.selectionBackground}>
                   {input.slice(pathPreviewPrefixLength)}
                 </text>
               </box>
@@ -853,11 +901,11 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
                 <input
                   focused={active}
                   flexGrow={1}
-                  backgroundColor={INPUT_BACKGROUND}
-                  focusedBackgroundColor={INPUT_BACKGROUND}
-                  textColor="#E2E8F0"
-                  focusedTextColor="#F8FAFC"
-                  placeholderColor="#64748B"
+                  backgroundColor={activeTheme.inputBackground}
+                  focusedBackgroundColor={activeTheme.inputBackground}
+                  textColor={activeTheme.text}
+                  focusedTextColor={activeTheme.textStrong}
+                  placeholderColor={activeTheme.textDim}
                   placeholder="Ask Mucode, or type / for commands"
                   value={input}
                   onInput={(value) => {
@@ -923,6 +971,7 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
             selectedModel={selectedModel}
             selectedProvider={selectedProvider}
             status={activeSession?.status ?? "idle"}
+            theme={activeTheme}
             workingDirectory={activeWorkingDirectory}
           />
           <box height={PANEL_GAP} />

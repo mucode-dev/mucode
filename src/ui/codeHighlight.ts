@@ -1,6 +1,8 @@
 import { CodeRenderable, createTextAttributes, RGBA, type Renderable, type TextChunk } from "@opentui/core";
 import hljs from "highlight.js";
 
+import type { AppTheme } from "./theme.ts";
+
 export function normalizeSyntaxFiletype(filetype: string | undefined): string | undefined {
   if (!filetype) return undefined;
   const normalized = normalizeHighlightLanguage(filetype);
@@ -83,24 +85,26 @@ function inferCodeFiletype(content: string): string | undefined {
   return undefined;
 }
 
-export function codeHighlightChunks(chunks: TextChunk[], context: { content: string; filetype: string }): TextChunk[] {
-  const language = normalizeHighlightLanguage(context.filetype);
-  if (!language || treeSitterFiletype(language)) return chunks;
-  return highlightJsChunks(context.content, language) ?? chunks;
+export function createCodeHighlighter(theme: AppTheme) {
+  return (chunks: TextChunk[], context: { content: string; filetype: string }): TextChunk[] => {
+    const language = normalizeHighlightLanguage(context.filetype);
+    if (!language || treeSitterFiletype(language)) return chunks;
+    return highlightJsChunks(context.content, language, theme) ?? chunks;
+  };
 }
 
-function highlightJsChunks(content: string, language: string): TextChunk[] | null {
+function highlightJsChunks(content: string, language: string, theme: AppTheme): TextChunk[] | null {
   try {
     const result = hljs.getLanguage(language)
       ? hljs.highlight(content, { language, ignoreIllegals: true })
       : hljs.highlightAuto(content);
-    return htmlHighlightToChunks(result.value);
+    return htmlHighlightToChunks(result.value, theme);
   } catch {
     return null;
   }
 }
 
-function htmlHighlightToChunks(html: string): TextChunk[] {
+function htmlHighlightToChunks(html: string, theme: AppTheme): TextChunk[] {
   const chunks: TextChunk[] = [];
   const stack: string[] = [];
   const token = /<span class="([^"]+)">|<\/span>|([^<]+)/gu;
@@ -117,7 +121,7 @@ function htmlHighlightToChunks(html: string): TextChunk[] {
     }
     const text = decodeHtmlEntities(match[2] ?? "");
     if (!text) continue;
-    const style = highlightClassStyle(stack.at(-1));
+    const style = highlightClassStyle(stack.at(-1), theme);
     chunks.push({
       __isChunk: true,
       text,
@@ -131,36 +135,39 @@ function htmlHighlightToChunks(html: string): TextChunk[] {
   return chunks.length > 0 ? chunks : [{ __isChunk: true, text: decodeHtmlEntities(html) }];
 }
 
-function highlightClassStyle(className: string | undefined): {
+function highlightClassStyle(
+  className: string | undefined,
+  theme: AppTheme,
+): {
   fg?: string;
   bold?: boolean;
   italic?: boolean;
 } {
   const classes = className?.split(/\s+/u) ?? [];
   if (classes.some((name) => name.endsWith("keyword") || name.endsWith("literal"))) {
-    return { fg: "#FCA5A5", bold: true };
+    return { fg: theme.accent, bold: true };
   }
   if (classes.some((name) => name.endsWith("string") || name.endsWith("regexp"))) {
-    return { fg: "#A5D6FF" };
+    return { fg: theme.success };
   }
   if (classes.some((name) => name.endsWith("number") || name.endsWith("built_in"))) {
-    return { fg: "#BAE6FD" };
+    return { fg: theme.info };
   }
   if (classes.some((name) => name.endsWith("comment") || name.endsWith("quote"))) {
-    return { fg: "#94A3B8", italic: true };
+    return { fg: theme.textMuted, italic: true };
   }
   if (classes.some((name) => name.endsWith("type") || name.endsWith("class") || name.endsWith("title"))) {
-    return { fg: "#FDE68A" };
+    return { fg: theme.warning };
   }
   if (classes.some((name) => name.endsWith("attr") || name.endsWith("attribute") || name.endsWith("property"))) {
-    return { fg: "#93C5FD" };
+    return { fg: theme.info };
   }
   if (classes.some((name) => name.endsWith("tag") || name.endsWith("name"))) {
-    return { fg: "#7DD3FC" };
+    return { fg: theme.selectionBackground };
   }
-  if (classes.some((name) => name.endsWith("addition"))) return { fg: "#A7F3D0" };
-  if (classes.some((name) => name.endsWith("deletion"))) return { fg: "#FCA5A5" };
-  return { fg: "#E2E8F0" };
+  if (classes.some((name) => name.endsWith("addition"))) return { fg: theme.diffAdded };
+  if (classes.some((name) => name.endsWith("deletion"))) return { fg: theme.diffRemoved };
+  return { fg: theme.text };
 }
 
 function decodeHtmlEntities(value: string): string {
@@ -172,19 +179,22 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&#x27;|&#39;/gu, "'");
 }
 
-export function renderMarkdownNode(
-  token: unknown,
-  context: { defaultRender: () => Renderable | null },
-): Renderable | null | undefined {
-  const renderable = context.defaultRender();
-  if (renderable instanceof CodeRenderable && isRecord(token)) {
-    const content = typeof token.text === "string" ? token.text : renderable.content;
-    renderable.filetype = normalizeSyntaxFiletype(
-      typeof token.lang === "string" && token.lang ? token.lang : inferCodeFiletype(content),
-    );
-    renderable.onChunks = codeHighlightChunks;
-  }
-  return renderable;
+export function createMarkdownNodeRenderer(theme: AppTheme) {
+  const onChunks = createCodeHighlighter(theme);
+  return (
+    token: unknown,
+    context: { defaultRender: () => Renderable | null },
+  ): Renderable | null | undefined => {
+    const renderable = context.defaultRender();
+    if (renderable instanceof CodeRenderable && isRecord(token)) {
+      const content = typeof token.text === "string" ? token.text : renderable.content;
+      renderable.filetype = normalizeSyntaxFiletype(
+        typeof token.lang === "string" && token.lang ? token.lang : inferCodeFiletype(content),
+      );
+      renderable.onChunks = onChunks;
+    }
+    return renderable;
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

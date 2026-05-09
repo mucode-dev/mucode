@@ -119,6 +119,11 @@ type PiToolDetails = {
   command?: string;
   path?: string;
   exitCode?: number;
+  previousContent?: string;
+  newContent?: string;
+  oldText?: string;
+  newText?: string;
+  unifiedDiff?: string;
 };
 
 export class CodeSession {
@@ -350,8 +355,13 @@ function createPiAgentTools(env: NodeExecutionEnv, mode: TuiMode): AgentTool[] {
       execute: async (_toolCallId, params) => {
         const args = params as { path: string; content: string };
         if (!allowMutation) throw new Error("write is disabled in plan mode.");
+        const previousContent = await env.readTextFile(args.path).catch(() => undefined);
         await env.writeFile(args.path, args.content);
-        return piTextResult(`Wrote ${args.content.length} bytes to ${args.path}`, { path: args.path });
+        return piTextResult(`Wrote ${args.content.length} bytes to ${args.path}`, {
+          path: args.path,
+          previousContent,
+          newContent: args.content,
+        });
       },
       executionMode: "sequential",
     },
@@ -371,7 +381,13 @@ function createPiAgentTools(env: NodeExecutionEnv, mode: TuiMode): AgentTool[] {
         if (!current.includes(args.oldText)) throw new Error(`Text to replace was not found in ${args.path}`);
         const next = current.replace(args.oldText, args.newText);
         await env.writeFile(args.path, next);
-        return piTextResult(`Edited ${args.path}`, { path: args.path });
+        return piTextResult(`Edited ${args.path}`, {
+          path: args.path,
+          oldText: args.oldText,
+          newText: args.newText,
+          previousContent: current,
+          newContent: next,
+        });
       },
       executionMode: "sequential",
     },
@@ -490,7 +506,8 @@ function translatePiHarnessEvent(event: AgentHarnessEvent, onEvent: (event: Sess
       type: "work",
       id: event.toolCallId,
       label: event.toolName,
-      detail: JSON.stringify(event.args),
+      detail: piToolWorkDetail(event.toolName, event.args),
+      ...(piToolCode(event.toolName, event.args) ? { code: piToolCode(event.toolName, event.args) } : {}),
       status: "started",
     });
     return;
@@ -511,6 +528,33 @@ function translatePiHarnessEvent(event: AgentHarnessEvent, onEvent: (event: Sess
       id: event.toolCallId,
       label: event.toolName,
       detail: piToolDetail(event.result),
+      ...(piToolCode(event.toolName, event.result) ? { code: piToolCode(event.toolName, event.result) } : {}),
+      status: event.isError ? "failed" : "completed",
+    });
+    return;
+  }
+  if (event.type === "tool_call") {
+    const code = piToolCode(event.toolName, event.input);
+    onEvent({
+      type: "work",
+      id: event.toolCallId,
+      label: event.toolName,
+      detail: piToolWorkDetail(event.toolName, event.input),
+      ...(code ? { code } : {}),
+      status: "started",
+    });
+    return;
+  }
+  if (event.type === "tool_result") {
+    const code =
+      piToolCode(event.toolName, event.details) ??
+      piToolCode(event.toolName, event.input);
+    onEvent({
+      type: "work",
+      id: event.toolCallId,
+      label: event.toolName,
+      detail: piToolResultDetail(event),
+      ...(code ? { code } : {}),
       status: event.isError ? "failed" : "completed",
     });
   }
@@ -525,6 +569,62 @@ function piToolDetail(value: unknown): string | undefined {
   if (typeof details.path === "string") return details.path;
   if (typeof details.text === "string") return details.text.slice(0, 500);
   return undefined;
+}
+
+function piToolWorkDetail(toolName: string, value: unknown): string | undefined {
+  const record = piToolRecord(value);
+  if (!record) return undefined;
+  return detailLines([
+    ["tool", toolName],
+    ["path", findValue(record, ["path", "filePath", "filepath"])],
+    ["command", findValue(record, ["command", "cmd"])],
+    ["args", value],
+  ]);
+}
+
+function piToolResultDetail(event: Extract<AgentHarnessEvent, { type: "tool_result" }>): string | undefined {
+  const details = piToolRecord(event.details);
+  return detailLines([
+    ["tool", event.toolName],
+    ["path", findValue(details ?? {}, ["path", "filePath", "filepath"])],
+    ["command", findValue(details ?? {}, ["command", "cmd"])],
+    ["output", piToolDetail(event.details)],
+    ["args", event.input],
+    ["raw", stringifyCompact(event.details, 900)],
+  ]);
+}
+
+function piToolCode(toolName: string, value: unknown): SessionCodeBlock | undefined {
+  const record = piToolRecord(value);
+  if (!record) return undefined;
+
+  const explicit = executionBlockFromRecord(record, toolName);
+  if (explicit) return explicit;
+
+  const previousContent = findStringValue(record, ["previousContent"]);
+  const newContent = findStringValue(record, ["newContent"]);
+  const path = findStringValue(record, ["path", "filePath", "filepath"]) ?? undefined;
+  if (previousContent !== null && newContent !== null) {
+    const content =
+      previousContent.length === 0
+        ? addedFileDiff(path ?? "generated", newContent)
+        : replacementDiff(path ?? "edited", previousContent, newContent);
+    return {
+      kind: "diff",
+      title: path ? `Diff: ${path}` : "Diff",
+      ...(path ? { path } : {}),
+      filetype: filePathToFenceLanguage(path),
+      content,
+    };
+  }
+
+  const fromArgs = executionBlockFromToolArgs(record, toolName);
+  return fromArgs;
+}
+
+function piToolRecord(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  return isRecord(value.details) ? value.details : value;
 }
 
 class OpenCodeCliSession {

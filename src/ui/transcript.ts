@@ -1,5 +1,6 @@
 import type { SessionCodeBlock, SessionStreamKind } from "../session.ts";
 import type { SessionWorkBlock } from "../types.ts";
+import type { AppTheme } from "./theme.ts";
 
 export function escapeMarkdownInline(value: string): string {
   return value.replace(/[\\`*_{}[\]()#+\-.!|>]/gu, "\\$&").replace(/\n/gu, " ");
@@ -95,6 +96,10 @@ export function workBlockMarker(id: string): string {
   return `\n\n[[work-block:${id}]]\n\n`;
 }
 
+export function codeBlockMarker(id: string): string {
+  return `\n\n[[code-block:${id}]]\n\n`;
+}
+
 export function executionBlockTitle(block: SessionCodeBlock): string {
   if (block.title) return block.title;
   if (block.path && block.kind === "diff") return `Diff: ${block.path}`;
@@ -102,18 +107,18 @@ export function executionBlockTitle(block: SessionCodeBlock): string {
   return block.kind === "diff" ? "Diff" : "Code";
 }
 
-export function statusColor(status: SessionWorkBlock["status"]): string {
+export function statusColor(status: SessionWorkBlock["status"], theme: AppTheme): string {
   switch (status) {
     case "completed":
-      return "#A7F3D0";
+      return theme.success;
     case "failed":
-      return "#FCA5A5";
+      return theme.danger;
     case "running":
-      return "#FDE68A";
+      return theme.warning;
     case "started":
-      return "#BAE6FD";
+      return theme.info;
     default:
-      return "#94A3B8";
+      return theme.textMuted;
   }
 }
 

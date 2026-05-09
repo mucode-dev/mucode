@@ -24,6 +24,8 @@ export interface SharedSessionContextValue {
   setProviderId: Dispatch<SetStateAction<string>>;
   modelSlug: string;
   setModelSlug: Dispatch<SetStateAction<string>>;
+  themeId: string;
+  setThemeId: Dispatch<SetStateAction<string>>;
   selectedIndex: number;
   setSelectedIndex: Dispatch<SetStateAction<number>>;
   log: string;
@@ -60,6 +62,7 @@ export function SharedSessionProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<TuiMode>(defaultState.settings.mode);
   const [providerId, setProviderId] = useState<string>(defaultState.settings.providerId);
   const [modelSlug, setModelSlug] = useState(defaultState.settings.modelSlug);
+  const [themeId, setThemeId] = useState(defaultState.settings.themeId);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [log, setLog] = useState("");
   const [activeSessionId, setActiveSessionId] = useState(defaultState.activeSessionId);
@@ -88,6 +91,8 @@ export function SharedSessionProvider({ children }: { children: ReactNode }) {
       setProviderId,
       modelSlug,
       setModelSlug,
+      themeId,
+      setThemeId,
       selectedIndex,
       setSelectedIndex,
       log,
@@ -124,6 +129,7 @@ export function SharedSessionProvider({ children }: { children: ReactNode }) {
       log,
       mode,
       modelSlug,
+      themeId,
       optionSelections,
       pathCompletionAnchor,
       providerId,

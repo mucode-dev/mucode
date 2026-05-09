@@ -4,6 +4,7 @@ export type PickerKind =
   | "slash"
   | "provider"
   | "model"
+  | "theme"
   | "mode"
   | "options"
   | "sessions"
