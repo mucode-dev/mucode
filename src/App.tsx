@@ -1,4 +1,5 @@
 import { useKeyboard, useRenderer } from "@opentui/react";
+import { CliRenderEvents, type Selection } from "@opentui/core";
 import { realpathSync } from "node:fs";
 import { useEffect, useMemo, useState } from "react";
 
@@ -170,6 +171,20 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
       }
     };
   }, []);
+
+  useEffect(() => {
+    function copySelection(selection: Selection) {
+      const selectedText = selection.getSelectedText();
+      if (!selectedText) return;
+      const copied = renderer.copyToClipboardOSC52(selectedText);
+      setLog(copied ? "Copied selection." : "Selection copied by terminal is not supported here.");
+    }
+
+    renderer.on(CliRenderEvents.SELECTION, copySelection);
+    return () => {
+      renderer.off(CliRenderEvents.SELECTION, copySelection);
+    };
+  }, [renderer, setLog]);
 
   useEffect(() => {
     let alive = true;
