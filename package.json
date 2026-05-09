@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "dev": "bun run dev.tsx",
-    "start": "bun run src/index.tsx"
+    "start": "bun run src/index.tsx",
+    "typecheck": "bunx tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "latest"
