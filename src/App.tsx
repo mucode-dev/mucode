@@ -1,4 +1,5 @@
 import { useKeyboard, useRenderer } from "@opentui/react";
+import { realpathSync } from "node:fs";
 import { useEffect, useMemo, useState } from "react";
 
 import { PickerPanel } from "./components/PickerPanel.tsx";
@@ -23,6 +24,14 @@ import { closeActiveStreamFence, escapeMarkdownInline, formatStreamDelta, stream
 
 function isCompactCommand(input: string): boolean {
   return /^\/compact(?:\s*)$/u.test(input.trim());
+}
+
+function normalizeDirectoryForCompare(directory: string): string {
+  try {
+    return realpathSync(directory);
+  } catch {
+    return directory;
+  }
 }
 
 interface AppProps {
@@ -163,7 +172,7 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
       .then((nextProviders) => {
         if (!alive) return;
         setProviders(nextProviders);
-        const firstReady = nextProviders.find((provider) => provider.installed);
+        const firstReady = nextProviders.find((provider) => provider.installed && provider.enabled);
         if (firstReady && !persistenceReadyRef.current) {
           const firstModel = firstReady.models[0];
           setProviderId(firstReady.instanceId);
@@ -205,6 +214,14 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
   const optionDescriptors = selectedModel?.capabilities?.optionDescriptors ?? [];
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   const activeWorkingDirectory = activeSession?.workingDirectory ?? draftWorkingDirectory;
+  const currentWorkingDirectory = useMemo(() => normalizeDirectoryForCompare(process.cwd()), []);
+  const sidebarSessions = useMemo(
+    () =>
+      sessions.filter(
+        (session) => normalizeDirectoryForCompare(session.workingDirectory) === currentWorkingDirectory,
+      ),
+    [currentWorkingDirectory, sessions],
+  );
   const activeContextMaxTokens = modelContextWindow(
     providerId,
     modelSlug,
@@ -534,6 +551,7 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
       setModelSlug(nextModel?.slug ?? "");
       setOptionSelections(defaultOptionSelections(nextModel));
       setActiveOptionIndex(null);
+      setLog(provider.enabled ? "" : provider.message ?? `${provider.displayName} is not configured.`);
       setInput("");
       return;
     }
@@ -629,6 +647,10 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
 
   async function submitPrompt(prompt: string) {
     if (!selectedProvider) return;
+    if (!selectedProvider.enabled) {
+      setLog(selectedProvider.message ?? `${selectedProvider.displayName} is not configured.`);
+      return;
+    }
     const existingSession = activeSession;
     const sessionId = existingSession?.id ?? createChatId();
     const workingDirectory = existingSession?.workingDirectory ?? draftWorkingDirectory;
@@ -797,7 +819,7 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
       backgroundColor={APP_BACKGROUND}
     >
       <box flexDirection="row" flexGrow={1}>
-        {sidebarOpen ? <SessionSidebar activeSessionId={activeSessionId} sessions={sessions} /> : null}
+        {sidebarOpen ? <SessionSidebar activeSessionId={activeSessionId} sessions={sidebarSessions} /> : null}
         {sidebarOpen ? <box width={PANEL_GAP} /> : null}
 
         <box flexDirection="column" flexGrow={1} backgroundColor={PANEL_BACKGROUND}>
@@ -836,7 +858,7 @@ function AppContent({ active = true, preserveOnUnmount = false, devActions }: Ap
                   textColor="#E2E8F0"
                   focusedTextColor="#F8FAFC"
                   placeholderColor="#64748B"
-                  placeholder="Ask Code, or type / for commands"
+                  placeholder="Ask Mucode, or type / for commands"
                   value={input}
                   onInput={(value) => {
                     setInput(value);

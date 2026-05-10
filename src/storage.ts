@@ -37,8 +37,8 @@ export interface PersistedState {
   sessions: PersistedSession[];
 }
 
-const DB_PATH = join(Bun.env.HOME ?? ".", ".local", "share", "code", "code.db");
-const SETTINGS_PATH = join(Bun.env.HOME ?? ".", ".config", "code", "code.json");
+const DB_PATH = join(Bun.env.HOME ?? ".", ".local", "share", "mucode", "mucode.db");
+const SETTINGS_PATH = join(Bun.env.HOME ?? ".", ".config", "mucode", "mucode.json");
 let saveQueue: Promise<void> = Promise.resolve();
 
 export function createDefaultPersistedState(now = Date.now()): PersistedState {

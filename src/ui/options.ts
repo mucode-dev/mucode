@@ -149,7 +149,7 @@ function providerOption(provider: LocalProviderSnapshot): PickerOption {
           `${provider.models.length} models`,
         ].join(" · ")
       : provider.message ?? "Not installed",
-    disabled: !provider.installed || !provider.enabled,
+    disabled: !provider.installed || (provider.group !== "api" && !provider.enabled),
   };
 }
 

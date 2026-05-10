@@ -330,8 +330,8 @@ async function requestCodexModels(): Promise<ServerProviderModel[]> {
   try {
     await request("initialize", {
       clientInfo: {
-        name: "code_tui",
-        title: "Code TUI",
+        name: "mucode_tui",
+        title: "Mucode TUI",
         version: "0.1.0",
       },
       capabilities: {

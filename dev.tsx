@@ -182,6 +182,7 @@ function DevOverlay({ initialApp, onExit }: DevOverlayProps) {
               flexDirection="column"
               flexGrow={active ? 1 : 0}
               height={active ? undefined : 0}
+              visible={active}
             >
               <InstanceBoundary
                 onError={(error) => {

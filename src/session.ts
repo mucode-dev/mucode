@@ -1,4 +1,4 @@
-import { Agent, type AgentEvent, type AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   getEnvApiKey,
   getModel,
@@ -11,9 +11,11 @@ import {
   createOpencodeServer,
   type OpencodeClient,
 } from "@opencode-ai/sdk/v2";
-import { readdir, stat } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
-
+import { AgentHarness } from "./pi-harness/agent-harness.ts";
+import { NodeExecutionEnv } from "./pi-harness/env/nodejs.ts";
+import type { AgentHarnessEvent } from "./pi-harness/types.ts";
+import { Session as PiHarnessSession } from "./pi-harness/session/session.ts";
+import { InMemorySessionStorage } from "./pi-harness/session/storage/memory.ts";
 import type { ProviderDriverKind, TuiMode } from "./provider.ts";
 
 export type SessionStatus = "idle" | "starting" | "running" | "ready" | "error";
@@ -119,11 +121,6 @@ type PiToolDetails = {
   exitCode?: number;
 };
 
-const PI_AGENT_SYSTEM_PROMPT = `You are a pragmatic coding agent running inside a terminal UI.
-Work in the user's selected working directory. Use tools to inspect files before making changes.
-Keep responses concise. When you change files, summarize the exact files and verification performed.
-In plan mode, propose a concise implementation plan and do not edit files or run mutating commands.`;
-
 export class CodeSession {
   private codex: CodexAppServerSession | null = null;
   private readonly openCode = new OpenCodeCliSession();
@@ -160,7 +157,7 @@ export class CodeSession {
       return;
     }
     if (input.provider === "piAi") {
-      this.piAgent.compact(input);
+      await this.piAgent.compact(input);
       return;
     }
     if (input.provider !== "codex") {
@@ -187,10 +184,12 @@ export class CodeSession {
 }
 
 class PiAgentSession {
-  private agent: Agent | null = null;
+  private harness: AgentHarness | null = null;
+  private env: NodeExecutionEnv | null = null;
   private providerId: KnownProvider | null = null;
   private modelId: string | null = null;
   private cwd = process.cwd();
+  private mode: TuiMode = "build";
   private readonly sessionId = `pi-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   async sendTurn(input: SubmitTurnInput): Promise<void> {
@@ -209,22 +208,20 @@ class PiAgentSession {
     }
 
     this.cwd = input.cwd;
-    const agent = this.ensureAgent(input.apiProviderId, input.model, model, input.options);
-    agent.state.model = model;
-    agent.state.thinkingLevel = piThinkingLevel(input.options);
-    agent.state.tools = createPiAgentTools(() => this.cwd, input.mode);
+    this.mode = input.mode;
+    const harness = this.ensureHarness(input.apiProviderId, input.model, model, input.options);
+    this.env!.cwd = input.cwd;
+    await harness.setModel(model);
+    await harness.setThinkingLevel(piThinkingLevel(input.options));
+    await harness.setActiveTools(createPiAgentTools(this.env!, input.mode).map((tool) => tool.name));
 
-    const unsubscribe = agent.subscribe((event) => {
-      translatePiAgentEvent(event, input.onEvent);
+    const unsubscribe = harness.subscribe((event) => {
+      translatePiHarnessEvent(event, input.onEvent);
     });
 
     input.onEvent({ type: "status", status: "starting", message: `Starting ${model.provider} agent` });
     try {
-      const prompt =
-        input.mode === "plan"
-          ? `Plan mode: propose a concise implementation plan only. Do not edit files yet.\n\n${input.prompt}`
-          : input.prompt;
-      await agent.prompt(prompt);
+      await harness.prompt(input.prompt);
       input.onEvent({ type: "status", status: "ready", message: `${model.name} turn completed` });
     } catch (error) {
       input.onEvent({ type: "error", message: error instanceof Error ? error.message : String(error) });
@@ -233,48 +230,68 @@ class PiAgentSession {
     }
   }
 
-  compact(input: CompactSessionInput): void {
-    if (!this.agent || this.agent.state.messages.length === 0) {
+  async compact(input: CompactSessionInput): Promise<void> {
+    if (!this.harness) {
       input.onEvent({ type: "error", message: "No pi agent session to compact yet." });
       return;
     }
-    const messages = this.agent.state.messages;
-    const lastMessages = messages.slice(-8);
-    this.agent.state.messages = lastMessages;
-    input.onEvent({ type: "compacted", automatic: false });
+    const unsubscribe = this.harness.subscribe((event) => {
+      translatePiHarnessEvent(event, input.onEvent);
+    });
+    try {
+      await this.harness.compact();
+      input.onEvent({ type: "status", status: "ready", message: "Pi agent context compacted" });
+    } catch (error) {
+      input.onEvent({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      unsubscribe();
+    }
   }
 
   close(): void {
-    this.agent?.abort();
-    this.agent = null;
+    void this.harness?.abort().catch(() => undefined);
+    void this.env?.cleanup().catch(() => undefined);
+    this.harness = null;
+    this.env = null;
   }
 
-  private ensureAgent(
+  private ensureHarness(
     providerId: KnownProvider,
     modelId: string,
     model: PiModel<string>,
     options: Record<string, string | boolean>,
-  ): Agent {
-    if (!this.agent) {
+  ): AgentHarness {
+    if (!this.harness) {
       this.providerId = providerId;
       this.modelId = modelId;
-      this.agent = new Agent({
-        initialState: {
-          systemPrompt: PI_AGENT_SYSTEM_PROMPT,
-          model,
-          thinkingLevel: piThinkingLevel(options),
-          tools: createPiAgentTools(() => this.cwd, "build"),
+      this.env = new NodeExecutionEnv({ cwd: this.cwd, shellEnv: process.env });
+      const session = new PiHarnessSession(
+        new InMemorySessionStorage({
+          metadata: { id: this.sessionId, createdAt: new Date().toISOString() },
+        }),
+      );
+      const tools = createPiAgentTools(this.env, this.mode);
+      this.harness = new AgentHarness({
+        env: this.env,
+        session,
+        model,
+        thinkingLevel: piThinkingLevel(options),
+        tools,
+        activeToolNames: tools.map((tool) => tool.name),
+        requestAuth: async (authModel) => {
+          const apiKey = getEnvApiKey(authModel.provider as KnownProvider);
+          return apiKey ? { apiKey } : undefined;
         },
-        getApiKey: (provider) => getEnvApiKey(provider),
-        sessionId: this.sessionId,
-        toolExecution: "sequential",
+        systemPrompt: () => piSystemPrompt(this.cwd, this.mode),
       });
-      return this.agent;
+      this.harness.agent.sessionId = this.sessionId;
+      this.harness.agent.toolExecution = "sequential";
+      return this.harness;
     }
 
     this.providerId = providerId;
     this.modelId = modelId;
-    return this.agent;
+    return this.harness;
   }
 }
 
@@ -289,11 +306,11 @@ function piThinkingLevel(options: Record<string, string | boolean>) {
     : "off";
 }
 
-function createPiAgentTools(getCwd: () => string, mode: TuiMode): AgentTool[] {
+function createPiAgentTools(env: NodeExecutionEnv, mode: TuiMode): AgentTool[] {
   const allowMutation = mode === "build";
   return [
     {
-      name: "list_directory",
+      name: "ls",
       label: "List directory",
       description: "List files and folders in a directory.",
       parameters: Type.Object({
@@ -301,20 +318,16 @@ function createPiAgentTools(getCwd: () => string, mode: TuiMode): AgentTool[] {
       }),
       execute: async (_toolCallId, params) => {
         const args = params as { path?: string };
-        const target = resolveToolPath(getCwd(), args.path);
-        const entries = await readdir(target);
-        const rows = await Promise.all(
-          entries.slice(0, 200).map(async (entry) => {
-            const entryPath = resolve(target, entry);
-            const info = await stat(entryPath).catch(() => null);
-            return `${info?.isDirectory() ? "dir " : "file"} ${entry}`;
-          }),
-        );
+        const target = args.path?.trim() || ".";
+        const entries = await env.listDir(target);
+        const rows = entries
+          .slice(0, 200)
+          .map((entry) => `${entry.kind === "directory" ? "dir " : "file"} ${entry.name}`);
         return piTextResult(rows.join("\n") || "(empty)", { path: target });
       },
     },
     {
-      name: "read_file",
+      name: "read",
       label: "Read file",
       description: "Read a UTF-8 text file.",
       parameters: Type.Object({
@@ -322,13 +335,12 @@ function createPiAgentTools(getCwd: () => string, mode: TuiMode): AgentTool[] {
       }),
       execute: async (_toolCallId, params) => {
         const args = params as { path: string };
-        const target = resolveToolPath(getCwd(), args.path);
-        const text = await Bun.file(target).text();
-        return piTextResult(text.slice(0, 80_000), { path: target });
+        const text = await env.readTextFile(args.path);
+        return piTextResult(text.slice(0, 80_000), { path: args.path });
       },
     },
     {
-      name: "write_file",
+      name: "write",
       label: "Write file",
       description: "Write a UTF-8 text file. Only available in build mode.",
       parameters: Type.Object({
@@ -337,28 +349,54 @@ function createPiAgentTools(getCwd: () => string, mode: TuiMode): AgentTool[] {
       }),
       execute: async (_toolCallId, params) => {
         const args = params as { path: string; content: string };
-        if (!allowMutation) throw new Error("write_file is disabled in plan mode.");
-        const target = resolveToolPath(getCwd(), args.path);
-        await Bun.write(target, args.content);
-        return piTextResult(`Wrote ${args.content.length} bytes to ${target}`, { path: target });
+        if (!allowMutation) throw new Error("write is disabled in plan mode.");
+        await env.writeFile(args.path, args.content);
+        return piTextResult(`Wrote ${args.content.length} bytes to ${args.path}`, { path: args.path });
       },
       executionMode: "sequential",
     },
     {
-      name: "run_shell_command",
+      name: "edit",
+      label: "Edit file",
+      description: "Replace text in a UTF-8 file. Only available in build mode.",
+      parameters: Type.Object({
+        path: Type.String({ description: "File path. Relative paths resolve from the working directory." }),
+        oldText: Type.String({ description: "Exact text to replace." }),
+        newText: Type.String({ description: "Replacement text." }),
+      }),
+      execute: async (_toolCallId, params) => {
+        const args = params as { path: string; oldText: string; newText: string };
+        if (!allowMutation) throw new Error("edit is disabled in plan mode.");
+        const current = await env.readTextFile(args.path);
+        if (!current.includes(args.oldText)) throw new Error(`Text to replace was not found in ${args.path}`);
+        const next = current.replace(args.oldText, args.newText);
+        await env.writeFile(args.path, next);
+        return piTextResult(`Edited ${args.path}`, { path: args.path });
+      },
+      executionMode: "sequential",
+    },
+    {
+      name: "bash",
       label: "Run shell command",
       description: "Run a shell command in the working directory. Mutating commands are only allowed in build mode.",
       parameters: Type.Object({
         command: Type.String({ description: "Command to run." }),
-        timeoutMs: Type.Optional(Type.Number({ description: "Timeout in milliseconds, default 30000." })),
+        timeout: Type.Optional(Type.Number({ description: "Timeout in seconds, default 30." })),
       }),
       execute: async (_toolCallId, params, signal) => {
-        const args = params as { command: string; timeoutMs?: number };
+        const args = params as { command: string; timeout?: number };
         if (!allowMutation && mayMutateShell(args.command)) {
           throw new Error("Mutating shell commands are disabled in plan mode.");
         }
-        const result = await runShellCommand(args.command, getCwd(), args.timeoutMs, signal);
-        return piTextResult(result.text, {
+        const result = await env.exec(args.command, { timeout: args.timeout ?? 30, signal });
+        const text = [
+          result.stdout ? `stdout:\n${result.stdout}` : "",
+          result.stderr ? `stderr:\n${result.stderr}` : "",
+          `exit code: ${result.exitCode}`,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+        return piTextResult(text.slice(0, 80_000), {
           command: args.command,
           exitCode: result.exitCode,
         });
@@ -366,11 +404,6 @@ function createPiAgentTools(getCwd: () => string, mode: TuiMode): AgentTool[] {
       executionMode: "sequential",
     },
   ];
-}
-
-function resolveToolPath(cwd: string, pathValue: string | undefined): string {
-  if (!pathValue || pathValue.trim() === "") return cwd;
-  return isAbsolute(pathValue) ? pathValue : resolve(cwd, pathValue);
 }
 
 function piTextResult(text: string, details: PiToolDetails = {}) {
@@ -384,43 +417,33 @@ function mayMutateShell(command: string): boolean {
   return /\b(rm|mv|cp|chmod|chown|mkdir|rmdir|touch|tee|sed\s+-i|perl\s+-pi|git\s+(?:add|commit|checkout|reset|clean|merge|rebase|pull|push)|bun\s+(?:add|remove|install)|npm\s+(?:install|i|uninstall|remove)|pnpm\s+(?:add|remove|install)|yarn\s+(?:add|remove|install))\b/u.test(command);
 }
 
-async function runShellCommand(
-  command: string,
-  cwd: string,
-  timeoutMs: number | undefined,
-  signal: AbortSignal | undefined,
-): Promise<{ exitCode: number; text: string }> {
-  const proc = Bun.spawn(["/bin/zsh", "-lc", command], {
-    cwd,
-    env: process.env,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const timeout = setTimeout(() => proc.kill(), Math.max(1_000, timeoutMs ?? 30_000));
-  const abort = () => proc.kill();
-  signal?.addEventListener("abort", abort, { once: true });
-  try {
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    const text = [
-      stdout ? `stdout:\n${stdout}` : "",
-      stderr ? `stderr:\n${stderr}` : "",
-      `exit code: ${exitCode}`,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-    return { exitCode, text: text.slice(0, 80_000) };
-  } finally {
-    clearTimeout(timeout);
-    signal?.removeEventListener("abort", abort);
-  }
+function piSystemPrompt(cwd: string, mode: TuiMode): string {
+  const date = new Date().toISOString().slice(0, 10);
+  return `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+
+Available tools:
+- read: Read a UTF-8 text file.
+- bash: Run shell commands in the working directory.
+- edit: Replace exact text in a file.
+- write: Create or overwrite a file.
+- ls: List files and folders.
+
+Guidelines:
+- Be concise in your responses.
+- Show file paths clearly when working with files.
+- Prefer read, ls, and bash for exploration before editing.
+- When changing files, summarize exact files changed and verification performed.
+${mode === "plan" ? "- Plan mode is active. Propose a concise implementation plan only. Do not edit files or run mutating commands." : ""}
+
+Current date: ${date}
+Current working directory: ${cwd}`;
 }
 
-function translatePiAgentEvent(event: AgentEvent, onEvent: (event: SessionEvent) => void): void {
+function translatePiHarnessEvent(event: AgentHarnessEvent, onEvent: (event: SessionEvent) => void): void {
+  if (event.type === "session_compact") {
+    onEvent({ type: "compacted", automatic: false });
+    return;
+  }
   if (event.type === "agent_start") {
     onEvent({ type: "status", status: "running", message: "Running pi agent" });
     return;
@@ -754,7 +777,7 @@ class OpenCodeSdkSession {
     });
     const created = await client.session.create({
       directory: cwd,
-      title: "Code TUI",
+      title: "Mucode TUI",
       permission: [{ permission: "*", pattern: "*", action: "allow" }],
     });
     const sessionId = created.data?.id;
@@ -1125,8 +1148,8 @@ class CodexAppServerSession {
     const session = new CodexAppServerSession(proc, onEvent);
     await session.request("initialize", {
       clientInfo: {
-        name: "code_tui",
-        title: "Code TUI",
+        name: "mucode_tui",
+        title: "Mucode TUI",
         version: "0.1.0",
       },
       capabilities: {
