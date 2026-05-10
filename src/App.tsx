@@ -36,6 +36,7 @@ export function App() {
   const [log, setLog] = useState("");
   const [activeSessionId, setActiveSessionId] = useState(defaultState.activeSessionId);
   const [sidebarOpen, setSidebarOpen] = useState(defaultState.sidebarOpen);
+  const [showToolDetails, setShowToolDetails] = useState(false);
   const [sessions, setSessions] = useState<LocalSessionState[]>(defaultState.sessions);
   const [activeOptionIndex, setActiveOptionIndex] = useState<number | null>(null);
   const [hiddenPathInput, setHiddenPathInput] = useState<string | null>(null);
@@ -640,6 +641,15 @@ export function App() {
   }
 
   useKeyboard((key) => {
+    if (key.ctrl && key.name === "t") {
+      setShowToolDetails((current) => {
+        const next = !current;
+        setLog(next ? "Tool details expanded" : "Tool details collapsed");
+        return next;
+      });
+      return;
+    }
+
     if (key.name === "escape") {
       if (pickerKind) {
         setInput("");
@@ -705,7 +715,7 @@ export function App() {
             ) : (
               <box flexGrow={1} border padding={1}>
                 <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
-                  {renderSessionOutput(activeSession)}
+                  {renderSessionOutput(activeSession, { showWorkDetails: showToolDetails })}
                 </scrollbox>
               </box>
             )}
