@@ -141,7 +141,7 @@ export function App() {
   useEffect(() => {
     for (const session of sessions) {
       if (!sessionRefs.current.has(session.id)) {
-        sessionRefs.current.set(session.id, new CodeSessionHarness());
+        sessionRefs.current.set(session.id, new CodeSession());
       }
     }
   }, [sessions]);
@@ -345,7 +345,7 @@ export function App() {
 
     const nextNumber = nextSessionNumberRef.current++;
     const id = `session-${nextNumber}`;
-    sessionRefs.current.set(id, new CodeSessionHarness());
+    sessionRefs.current.set(id, new CodeSession());
     setSessions((current) => [
       ...current,
       {
@@ -373,7 +373,7 @@ export function App() {
       if (current.length === 1) {
         const nextNumber = nextSessionNumberRef.current++;
         const replacementId = `session-${nextNumber}`;
-        sessionRefs.current.set(replacementId, new CodeSessionHarness());
+          sessionRefs.current.set(replacementId, new CodeSession());
         setActiveSessionId(replacementId);
         setSelectedIndex(0);
         return [
@@ -623,7 +623,7 @@ export function App() {
     try {
       const nextPath = resolveWorkingDirectory(pathInput, currentPath);
       await sessionRefs.current.get(sessionId)?.close();
-      sessionRefs.current.set(sessionId, new CodeSessionHarness());
+      sessionRefs.current.set(sessionId, new CodeSession());
       updateSession(sessionId, { workingDirectory: nextPath });
       setLog("");
     } catch (error) {
