@@ -1,4 +1,4 @@
-import type { SessionCodeBlock } from "../sessionHarness.ts";
+import type { SessionCodeBlock } from "../session.ts";
 import type { LocalSessionState, SessionWorkBlock } from "../types.ts";
 import { codeHighlightChunks, normalizeSyntaxFiletype, renderMarkdownNode } from "./codeHighlight.ts";
 import { OUTPUT_SYNTAX_STYLE } from "./theme.ts";
@@ -103,10 +103,10 @@ function renderWorkBlock(block: SessionWorkBlock, blockId: string, showDetails =
       {showDetails ? (
         <box
           flexDirection="column"
-          border
           padding={1}
           marginTop={1}
           gap={0}
+          backgroundColor="#111827"
         >
           {detailLines.slice(0, 6).map((line, lineIndex) => (
             <text key={`${blockId}-detail-${lineIndex}`} fg="#94A3B8">

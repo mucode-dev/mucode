@@ -1,5 +1,10 @@
 import { RGBA, SyntaxStyle } from "@opentui/core";
 
+export const APP_BACKGROUND = "#020617";
+export const PANEL_BACKGROUND = "#0F172A";
+export const PANEL_GAP = 1;
+export const PANEL_PADDING = 1;
+
 export const OUTPUT_SYNTAX_STYLE = SyntaxStyle.fromStyles({
   "markup.heading": { fg: RGBA.fromHex("#7DD3FC"), bold: true },
   "markup.heading.1": { fg: RGBA.fromHex("#A7F3D0"), bold: true },

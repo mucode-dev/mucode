@@ -1,5 +1,6 @@
 import type { LocalSessionState } from "../types.ts";
 import { formatSessionRow, SESSION_SIDEBAR_WIDTH } from "../ui/sessionList.ts";
+import { PANEL_BACKGROUND, PANEL_PADDING } from "../ui/theme.ts";
 
 interface SessionSidebarProps {
   activeSessionId: string;
@@ -8,7 +9,13 @@ interface SessionSidebarProps {
 
 export function SessionSidebar({ activeSessionId, sessions }: SessionSidebarProps) {
   return (
-    <box width={SESSION_SIDEBAR_WIDTH + 4} flexDirection="column" border padding={1} gap={0}>
+    <box
+      width={SESSION_SIDEBAR_WIDTH + 4}
+      flexDirection="column"
+      padding={PANEL_PADDING}
+      gap={0}
+      backgroundColor={PANEL_BACKGROUND}
+    >
       <text fg="#FDE68A">Sessions</text>
       {sessions.map((session) => (
         <text

@@ -1,6 +1,6 @@
-import type { LocalProviderSnapshot, ServerProviderModel, TuiMode } from "../providerHarness.ts";
+import type { LocalProviderSnapshot, ServerProviderModel, TuiMode } from "../provider.ts";
 import type { OptionSelectionValue } from "../types.ts";
-import type { TokenUsageSnapshot } from "../sessionHarness.ts";
+import type { TokenUsageSnapshot } from "../session.ts";
 
 interface StatusBarProps {
   activeContextLabel: string;

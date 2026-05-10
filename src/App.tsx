@@ -17,6 +17,7 @@ import { deriveContextUsage, formatContextUsage, modelContextWindow } from "./ui
 import { defaultOptionSelections, descriptorOptions, detectPickerKind, modeOptions, modelOptions, providerOptions, sessionOptions, slashOptions } from "./ui/options.ts";
 import { commonPrefixLength, parsePathCommand, pathInputForOption, pathOptions, resolveWorkingDirectory } from "./ui/path.ts";
 import { renderSessionOutput } from "./ui/sessionOutput.tsx";
+import { APP_BACKGROUND, PANEL_BACKGROUND, PANEL_GAP, PANEL_PADDING } from "./ui/theme.ts";
 import { closeActiveStreamFence, escapeMarkdownInline, formatStreamDelta, streamFenceLanguage, streamHeading, workBlockMarker } from "./ui/transcript.ts";
 
 function isCompactCommand(input: string): boolean {
@@ -35,6 +36,7 @@ export function App() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [log, setLog] = useState("");
   const [activeSessionId, setActiveSessionId] = useState(defaultState.activeSessionId);
+  const [draftWorkingDirectory, setDraftWorkingDirectory] = useState(process.cwd());
   const [sidebarOpen, setSidebarOpen] = useState(defaultState.sidebarOpen);
   const [showToolDetails, setShowToolDetails] = useState(false);
   const [sessions, setSessions] = useState<LocalSessionState[]>(defaultState.sessions);
@@ -46,7 +48,6 @@ export function App() {
   );
   const sessionRefs = useRef(new Map<string, CodeSession>());
   const programmaticInputRef = useRef(false);
-  const nextSessionNumberRef = useRef(2);
   const persistenceReadyRef = useRef(false);
   const persistenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -60,12 +61,8 @@ export function App() {
       setOptionSelections(state.settings.optionSelections);
       setSessions(state.sessions);
       setActiveSessionId(state.activeSessionId);
+      setDraftWorkingDirectory(process.cwd());
       setSidebarOpen(state.sidebarOpen);
-      const highestSessionNumber = state.sessions.reduce((highest, session) => {
-        const match = /^session-(\d+)$/u.exec(session.id);
-        return match ? Math.max(highest, Number(match[1])) : highest;
-      }, 1);
-      nextSessionNumberRef.current = highestSessionNumber + 1;
       persistenceReadyRef.current = true;
     });
     return () => {
@@ -150,7 +147,8 @@ export function App() {
   const selectedProvider = providers.find((provider) => provider.instanceId === providerId);
   const selectedModel = selectedProvider?.models.find((model) => model.slug === modelSlug);
   const optionDescriptors = selectedModel?.capabilities?.optionDescriptors ?? [];
-  const activeSession = sessions.find((session) => session.id === activeSessionId) ?? sessions[0];
+  const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const activeWorkingDirectory = activeSession?.workingDirectory ?? draftWorkingDirectory;
   const activeContextMaxTokens = modelContextWindow(providerId, modelSlug, optionSelections);
   const activeContextUsage = deriveContextUsage(
     activeSession,
@@ -216,7 +214,7 @@ export function App() {
       case "path":
         return pathOptions(
           input,
-          activeSession?.workingDirectory ?? process.cwd(),
+          activeWorkingDirectory,
           pathCompletionAnchor ?? input,
         );
       default:
@@ -225,7 +223,7 @@ export function App() {
   }, [
     activeOptionDescriptor,
     activeSessionId,
-    activeSession?.workingDirectory,
+    activeWorkingDirectory,
     input,
     mode,
     modelSlug,
@@ -338,38 +336,20 @@ export function App() {
     );
   }
 
-  function isReusableEmptySession(session: LocalSessionState | undefined): boolean {
-    return Boolean(session && session.status === "idle" && session.output.trim() === "");
+  function createChatId(): string {
+    return `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function chatTitle(prompt: string): string {
+    return prompt.trim().replace(/\s+/gu, " ").slice(0, 48) || "Untitled chat";
   }
 
   function createSession() {
-    const reusableSession = isReusableEmptySession(activeSession) ? activeSession : undefined;
-    if (reusableSession) {
-      setActiveSessionId(reusableSession.id);
-      setInput("");
-      setActiveOptionIndex(null);
-      setHiddenPathInput(null);
-      setPathCompletionAnchor(null);
-      return;
-    }
-
-    const nextNumber = nextSessionNumberRef.current++;
-    const id = `session-${nextNumber}`;
-    sessionRefs.current.set(id, new CodeSession());
-    setSessions((current) => [
-      ...current,
-      {
-        id,
-        title: `Session ${nextNumber}`,
-        status: "idle",
-        output: "",
-        lastActiveAt: Date.now(),
-        workingDirectory: process.cwd(),
-      },
-    ]);
-    setActiveSessionId(id);
+    setActiveSessionId("");
     setInput("");
     setActiveOptionIndex(null);
+    setHiddenPathInput(null);
+    setPathCompletionAnchor(null);
   }
 
   function deleteSession(sessionId: string) {
@@ -380,31 +360,13 @@ export function App() {
       const deletedIndex = current.findIndex((session) => session.id === sessionId);
       if (deletedIndex < 0) return current;
 
-      if (current.length === 1) {
-        const nextNumber = nextSessionNumberRef.current++;
-        const replacementId = `session-${nextNumber}`;
-          sessionRefs.current.set(replacementId, new CodeSession());
-        setActiveSessionId(replacementId);
-        setSelectedIndex(0);
-        return [
-          {
-            id: replacementId,
-            title: `Session ${nextNumber}`,
-            status: "idle",
-            output: "",
-            lastActiveAt: Date.now(),
-            workingDirectory: process.cwd(),
-          },
-        ];
-      }
-
       const nextSessions = current.filter((session) => session.id !== sessionId);
       if (sessionId === activeSessionId) {
         const nextActiveSession =
           nextSessions[Math.min(deletedIndex, nextSessions.length - 1)] ?? nextSessions[0];
-        if (nextActiveSession) setActiveSessionId(nextActiveSession.id);
+        setActiveSessionId(nextActiveSession?.id ?? "");
       }
-      setSelectedIndex((currentIndex) => Math.min(currentIndex, nextSessions.length - 1));
+      setSelectedIndex((currentIndex) => Math.max(0, Math.min(currentIndex, nextSessions.length - 1)));
       return nextSessions;
     });
     setLog("Session deleted");
@@ -569,23 +531,41 @@ export function App() {
   }
 
   async function submitPrompt(prompt: string) {
-    const sessionId = activeSessionId;
-    const harness = sessionRefs.current.get(sessionId);
-    if (!harness || !selectedProvider) return;
-    const workingDirectory = activeSession?.workingDirectory ?? process.cwd();
-    setSessions((current) =>
-      current.map((session) =>
-        session.id === sessionId
-          ? {
-              ...session,
-              title: session.output ? session.title : prompt.slice(0, 32) || session.title,
-              output: `${session.output}${session.output ? "\n\n" : ""}You: ${escapeMarkdownInline(prompt)}\n\n`,
-              activeStreamKind: undefined,
-              lastActiveAt: Date.now(),
-            }
-          : session,
-      ),
-    );
+    if (!selectedProvider) return;
+    const existingSession = activeSession;
+    const sessionId = existingSession?.id ?? createChatId();
+    const workingDirectory = existingSession?.workingDirectory ?? draftWorkingDirectory;
+    const harness = sessionRefs.current.get(sessionId) ?? new CodeSession();
+    sessionRefs.current.set(sessionId, harness);
+    setActiveSessionId(sessionId);
+    setSessions((current) => {
+      if (existingSession) {
+        return current.map((session) =>
+          session.id === sessionId
+            ? {
+                ...session,
+                title: session.output ? session.title : chatTitle(prompt),
+                output: `${session.output}${session.output ? "\n\n" : ""}You: ${escapeMarkdownInline(prompt)}\n\n`,
+                activeStreamKind: undefined,
+                lastActiveAt: Date.now(),
+              }
+            : session,
+        );
+      }
+
+      return [
+        ...current,
+        {
+          id: sessionId,
+          title: chatTitle(prompt),
+          status: "idle",
+          output: `You: ${escapeMarkdownInline(prompt)}\n\n`,
+          activeStreamKind: undefined,
+          lastActiveAt: Date.now(),
+          workingDirectory,
+        },
+      ];
+    });
     setLog("");
     try {
       await harness.submitTurn({
@@ -606,8 +586,11 @@ export function App() {
   async function compactActiveSession() {
     const sessionId = activeSessionId;
     const harness = sessionRefs.current.get(sessionId);
-    if (!harness || !selectedProvider) return;
-    const workingDirectory = activeSession?.workingDirectory ?? process.cwd();
+    if (!activeSession || !harness || !selectedProvider) {
+      setLog("No chat to compact yet");
+      return;
+    }
+    const workingDirectory = activeSession.workingDirectory;
     setLog("");
     try {
       await harness.compactSession({
@@ -629,12 +612,16 @@ export function App() {
     }
 
     const sessionId = activeSessionId;
-    const currentPath = activeSession?.workingDirectory ?? process.cwd();
+    const currentPath = activeWorkingDirectory;
     try {
       const nextPath = resolveWorkingDirectory(pathInput, currentPath);
-      await sessionRefs.current.get(sessionId)?.close();
-      sessionRefs.current.set(sessionId, new CodeSession());
-      updateSession(sessionId, { workingDirectory: nextPath });
+      if (activeSession) {
+        await sessionRefs.current.get(sessionId)?.close();
+        sessionRefs.current.set(sessionId, new CodeSession());
+        updateSession(sessionId, { workingDirectory: nextPath });
+      } else {
+        setDraftWorkingDirectory(nextPath);
+      }
       setLog("");
     } catch (error) {
       setLog(error instanceof Error ? error.message : String(error));
@@ -701,18 +688,18 @@ export function App() {
   });
 
   return (
-    <box flexDirection="column" flexGrow={1} padding={1} gap={1}>
-      <box flexDirection="row" justifyContent="space-between">
-        <text fg="#A7F3D0">Code TUI</text>
-        <text fg="#94A3B8">
-          {loadingProviders ? "loading providers" : `${providers.filter((p) => p.installed).length}/${providers.length} providers`}
-        </text>
-      </box>
-
-      <box flexDirection="row" flexGrow={1} gap={1}>
+    <box
+      flexDirection="column"
+      flexGrow={1}
+      padding={PANEL_GAP}
+      gap={PANEL_GAP}
+      backgroundColor={APP_BACKGROUND}
+    >
+      <box flexDirection="row" flexGrow={1}>
         {sidebarOpen ? <SessionSidebar activeSessionId={activeSessionId} sessions={sessions} /> : null}
+        {sidebarOpen ? <box width={PANEL_GAP} /> : null}
 
-        <box flexDirection="column" flexGrow={1} gap={1}>
+        <box flexDirection="column" flexGrow={1}>
           <box flexGrow={1} flexDirection="column">
             {pickerKind ? (
               <PickerPanel
@@ -722,7 +709,7 @@ export function App() {
                 selectedIndex={selectedIndex}
               />
             ) : (
-              <box flexGrow={1} border padding={1}>
+              <box flexGrow={1} padding={PANEL_PADDING} backgroundColor={PANEL_BACKGROUND}>
                 <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
                   {renderSessionOutput(activeSession, { showWorkDetails: showToolDetails })}
                 </scrollbox>
@@ -730,7 +717,8 @@ export function App() {
             )}
           </box>
 
-          <box border padding={1} height={3}>
+          <box height={PANEL_GAP} />
+          <box padding={PANEL_PADDING} height={3} backgroundColor={PANEL_BACKGROUND}>
             {showingPathPreview ? (
               <box flexDirection="row">
                 <text fg="#F8FAFC">{input.slice(0, pathPreviewPrefixLength)}</text>
@@ -739,10 +727,15 @@ export function App() {
                 </text>
               </box>
             ) : (
-              <box flexDirection="row" gap={2}>
+              <box flexDirection="row" gap={PANEL_GAP}>
                 <input
                   focused
                   flexGrow={1}
+                  backgroundColor={PANEL_BACKGROUND}
+                  focusedBackgroundColor={PANEL_BACKGROUND}
+                  textColor="#E2E8F0"
+                  focusedTextColor="#F8FAFC"
+                  placeholderColor="#64748B"
                   placeholder="Ask Code, or type / for commands"
                   value={input}
                   onInput={(value) => {
@@ -785,6 +778,7 @@ export function App() {
             )}
           </box>
 
+          <box height={PANEL_GAP} />
           <StatusBar
             activeContextLabel={activeContextLabel}
             activeContextUsage={activeContextUsage}
@@ -797,7 +791,7 @@ export function App() {
             selectedModel={selectedModel}
             selectedProvider={selectedProvider}
             status={activeSession?.status ?? "idle"}
-            workingDirectory={activeSession?.workingDirectory ?? process.cwd()}
+            workingDirectory={activeWorkingDirectory}
           />
         </box>
       </box>

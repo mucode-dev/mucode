@@ -1,4 +1,4 @@
-import type { SessionCodeBlock, SessionStreamKind } from "../sessionHarness.ts";
+import type { SessionCodeBlock, SessionStreamKind } from "../session.ts";
 import type { SessionWorkBlock } from "../types.ts";
 
 export function escapeMarkdownInline(value: string): string {

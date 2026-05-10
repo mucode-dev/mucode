@@ -1,4 +1,4 @@
-import type { ProviderOptionDescriptor } from "../providerHarness.ts";
+import type { ProviderOptionDescriptor } from "../provider.ts";
 import type { PickerKind, PickerOption } from "../types.ts";
 import { pickerTitle } from "../ui/options.ts";
 
@@ -17,7 +17,7 @@ export function PickerPanel({
 }: PickerPanelProps) {
   return (
     <box flexDirection="column" gap={1}>
-      <box flexDirection="column" border padding={1} gap={0}>
+      <box flexDirection="column" padding={1} gap={0} backgroundColor="#111827">
         <box flexDirection="row" justifyContent="space-between">
           <text fg="#FDE68A">{pickerTitle(pickerKind, activeOptionDescriptor)}</text>
           <text fg="#94A3B8">Esc to chat, Esc again to exit</text>

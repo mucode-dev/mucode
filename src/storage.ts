@@ -2,8 +2,8 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import type { ProviderDriverKind, TuiMode } from "./providerHarness.ts";
-import type { SessionCodeBlock, SessionStatus } from "./sessionHarness.ts";
+import type { ProviderDriverKind, TuiMode } from "./provider.ts";
+import type { SessionCodeBlock, SessionStatus } from "./session.ts";
 
 export interface PersistedSession {
   id: string;
@@ -44,7 +44,7 @@ let saveQueue: Promise<void> = Promise.resolve();
 export function createDefaultPersistedState(now = Date.now()): PersistedState {
   return {
     schemaVersion: 1,
-    activeSessionId: "session-1",
+    activeSessionId: "",
     sidebarOpen: false,
     settings: {
       providerId: "codex",
@@ -52,16 +52,7 @@ export function createDefaultPersistedState(now = Date.now()): PersistedState {
       mode: "build",
       optionSelections: {},
     },
-    sessions: [
-      {
-        id: "session-1",
-        title: "Session 1",
-        status: "idle",
-        output: "",
-        lastActiveAt: now,
-        workingDirectory: process.cwd(),
-      },
-    ],
+    sessions: [],
   };
 }
 
@@ -353,13 +344,13 @@ function isWorkStatus(value: unknown): value is PersistedWorkBlock["status"] {
 function normalizePersistedState(input: Partial<PersistedState>): PersistedState {
   const fallback = createDefaultPersistedState();
   const sessions =
-    Array.isArray(input.sessions) && input.sessions.length > 0
+    Array.isArray(input.sessions)
       ? input.sessions.map((session, index) => ({
-          id: typeof session.id === "string" && session.id ? session.id : `session-${index + 1}`,
+          id: typeof session.id === "string" && session.id ? session.id : `chat-${Date.now()}-${index}`,
           title:
             typeof session.title === "string" && session.title
-              ? session.title
-              : `Session ${index + 1}`,
+              ? normalizeSessionTitle(session.title, session.output)
+              : titleFromSessionOutput(session.output) ?? "Untitled chat",
           status: "idle" as const,
           output: typeof session.output === "string" ? session.output : "",
           lastActiveAt:
@@ -374,13 +365,13 @@ function normalizePersistedState(input: Partial<PersistedState>): PersistedState
           ...(session.workBlocks
             ? { workBlocks: parseWorkBlocks(JSON.stringify(session.workBlocks)) }
             : {}),
-        }))
+        })).filter((session) => !isEmptyNumberedSession(session))
       : fallback.sessions;
   const activeSessionId =
     typeof input.activeSessionId === "string" &&
     sessions.some((session) => session.id === input.activeSessionId)
       ? input.activeSessionId
-      : sessions[0]!.id;
+      : "";
   const settings = input.settings ?? fallback.settings;
 
   return {
@@ -395,6 +386,22 @@ function normalizePersistedState(input: Partial<PersistedState>): PersistedState
     },
     sessions,
   };
+}
+
+function normalizeSessionTitle(title: string, output: unknown): string {
+  if (!/^Session \d+$/u.test(title.trim())) return title;
+  return titleFromSessionOutput(output) ?? "Untitled chat";
+}
+
+function titleFromSessionOutput(output: unknown): string | null {
+  if (typeof output !== "string") return null;
+  const userLine = /^You:\s*(.+)$/mu.exec(output)?.[1]?.trim();
+  if (!userLine) return null;
+  return userLine.replace(/[`*_~[\]()]/gu, "").replace(/\s+/gu, " ").slice(0, 48) || null;
+}
+
+function isEmptyNumberedSession(session: PersistedSession): boolean {
+  return /^(?:Session \d+|Untitled chat)$/u.test(session.title.trim()) && session.output.trim() === "";
 }
 
 function isProviderId(value: unknown): value is ProviderDriverKind {
