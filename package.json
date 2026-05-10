@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "NODE_ENV=development bun run --watch dev.tsx",
+    "dev": "bun run dev.tsx",
     "start": "bun run src/index.tsx"
   },
   "devDependencies": {

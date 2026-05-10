@@ -1223,7 +1223,139 @@ function executionBlockFromRecord(
   }
 
   const output = findStringValue(record, ["output", "stdout"]);
-  return executionBlockFromToolOutput(output ?? undefined);
+  return (
+    executionBlockFromToolOutput(output ?? undefined) ??
+    executionBlockFromToolArgs(findValue(record, ["args", "arguments", "params", "input"]), title) ??
+    executionBlockFromToolArgs(record, title)
+  );
+}
+
+function executionBlockFromToolArgs(
+  value: unknown,
+  title: string | undefined,
+): SessionCodeBlock | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const explicitDiff = findStringValue(value, ["diff", "patch", "unifiedDiff"]);
+  const path = findStringValue(value, [
+    "file_path",
+    "filePath",
+    "filepath",
+    "target_file",
+    "path",
+  ]);
+  if (explicitDiff) {
+    return {
+      kind: "diff",
+      title: path ? `Diff: ${path}` : title ?? "Diff",
+      ...(path ? { path } : {}),
+      filetype: filePathToFenceLanguage(path ?? undefined) || filetypeFromUnifiedDiff(explicitDiff),
+      content: explicitDiff,
+    };
+  }
+
+  const editDiff = diffFromEditArgs(value, path);
+  if (editDiff) {
+    return {
+      kind: "diff",
+      title: path ? `Edit: ${path}` : title ?? "Edit",
+      ...(path ? { path } : {}),
+      filetype: filePathToFenceLanguage(path ?? undefined),
+      content: editDiff,
+    };
+  }
+
+  const content = findStringValue(value, [
+    "content",
+    "newContent",
+    "fileContent",
+    "body",
+    "text",
+  ]);
+  if (!content || !isWriteLikeTool(title, value)) return undefined;
+
+  const diff = addedFileDiff(path ?? "generated", content);
+  return {
+    kind: "diff",
+    title: path ? `Write: ${path}` : title ?? "Write",
+    ...(path ? { path } : {}),
+    filetype: filePathToFenceLanguage(path ?? undefined),
+    content: diff,
+  };
+}
+
+function diffFromEditArgs(record: Record<string, unknown>, path: string | null): string | undefined {
+  const oldText = findStringValue(record, [
+    "old_string",
+    "oldString",
+    "oldContent",
+    "old",
+    "find",
+  ]);
+  const newText = findStringValue(record, [
+    "new_string",
+    "newString",
+    "newContent",
+    "replacement",
+    "replace",
+  ]);
+  if (oldText !== null && newText !== null) {
+    return replacementDiff(path ?? "edited", oldText, newText);
+  }
+
+  const edits = record.edits ?? record.replacements;
+  if (Array.isArray(edits)) {
+    const hunks = edits
+      .map((edit, index) => {
+        if (!isRecord(edit)) return undefined;
+        const from = findStringValue(edit, ["old_string", "oldString", "old", "find"]);
+        const to = findStringValue(edit, ["new_string", "newString", "replacement", "replace"]);
+        return from !== null && to !== null
+          ? replacementDiff(path ?? `edit-${index + 1}`, from, to, index > 0)
+          : undefined;
+      })
+      .filter((diff): diff is string => Boolean(diff));
+    if (hunks.length > 0) return hunks.join("\n");
+  }
+
+  return undefined;
+}
+
+function replacementDiff(
+  path: string,
+  oldText: string,
+  newText: string,
+  omitHeader = false,
+): string {
+  const oldLines = diffLines(oldText);
+  const newLines = diffLines(newText);
+  return [
+    ...(omitHeader ? [] : [`--- a/${path}`, `+++ b/${path}`]),
+    `@@ -1,${Math.max(oldLines.length, 1)} +1,${Math.max(newLines.length, 1)} @@`,
+    ...oldLines.map((line) => `-${line}`),
+    ...newLines.map((line) => `+${line}`),
+  ].join("\n");
+}
+
+function addedFileDiff(path: string, content: string): string {
+  const lines = diffLines(content);
+  return [
+    "--- /dev/null",
+    `+++ b/${path}`,
+    `@@ -0,0 +1,${Math.max(lines.length, 1)} @@`,
+    ...lines.map((line) => `+${line}`),
+  ].join("\n");
+}
+
+function diffLines(value: string): string[] {
+  const lines = value.replace(/\r\n/gu, "\n").split("\n");
+  if (lines.length > 1 && lines.at(-1) === "") lines.pop();
+  return lines.length > 0 ? lines : [""];
+}
+
+function isWriteLikeTool(title: string | undefined, value: Record<string, unknown>): boolean {
+  const name = `${title ?? ""} ${findStringValue(value, ["tool", "name", "title"]) ?? ""}`.toLowerCase();
+  return /\b(write|create|edit|replace|update)\b/u.test(name);
 }
 
 function detectUnifiedDiff(value: string): string | undefined {
@@ -1441,7 +1573,10 @@ function openCodeToolWorkEvent(part: OpenCodeCliPart): SessionEvent {
         : rawStatus === "running"
           ? "running"
           : "started";
-  const code = executionBlockFromToolOutput(part.state?.output);
+  const toolArgs = part.args ?? part.input ?? part.params;
+  const code =
+    executionBlockFromToolOutput(part.state?.output) ??
+    executionBlockFromToolArgs(toolArgs, part.state?.title ?? part.tool);
   return {
     type: "work",
     id: part.callID ?? part.callId ?? part.id,
@@ -1454,7 +1589,7 @@ function openCodeToolWorkEvent(part: OpenCodeCliPart): SessionEvent {
           ["tool", part.tool],
           ["state", rawStatus],
           ["title", part.state?.title],
-          ["args", part.args ?? part.input ?? part.params],
+          ["args", toolArgs],
           ["error", part.state?.error],
         ])
       : detailLines([
@@ -1463,7 +1598,7 @@ function openCodeToolWorkEvent(part: OpenCodeCliPart): SessionEvent {
           ["tool", part.tool],
           ["state", rawStatus],
           ["title", part.state?.title],
-          ["args", part.args ?? part.input ?? part.params],
+          ["args", toolArgs],
           ["output", part.state?.output],
           ["error", part.state?.error],
         ]),

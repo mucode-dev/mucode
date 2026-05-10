@@ -180,10 +180,12 @@ function compactWorkMetadata(input: {
   const command = firstString(input.detailObject.command, fieldValue(args, ["command", "cmd"]));
   const title = input.title && input.title !== input.tool ? input.title : null;
   const output = outputMetadata(firstString(input.detailObject.output, input.detailObject.summary));
+  const code = codeMetadata(input.block.code);
 
   return uniqueNonEmpty([
     title,
     path,
+    code,
     pattern ? quoteIfNeeded(pattern) : null,
     command ? quoteIfNeeded(command) : null,
     output,
@@ -204,6 +206,12 @@ function outputMetadata(value: string | null): string | null {
   if (array) return `${array.length} ${array.length === 1 ? "match" : "matches"}`;
   const firstLine = trimmed.split(/\r?\n/u).find(Boolean);
   return firstLine ? clipText(firstLine, 48) : null;
+}
+
+function codeMetadata(block: SessionCodeBlock | undefined): string | null {
+  if (!block?.content) return null;
+  const lineCount = block.content.split(/\r?\n/u).length;
+  return `${block.kind === "diff" ? "diff" : "code"} ${lineCount} ${lineCount === 1 ? "line" : "lines"}`;
 }
 
 function fieldValue(record: Record<string, unknown> | null, keys: string[]): unknown {

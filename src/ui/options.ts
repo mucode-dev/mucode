@@ -16,6 +16,9 @@ export function detectPickerKind(input: string): PickerKind | null {
   if (command === "sessions") return "sessions";
   if (command === "sidebar") return "sidebar";
   if (command === "path") return "path";
+  if (command === "dev" || command === "load" || command === "apply" || command === "main" || command === "back" || command === "exit") {
+    return "slash";
+  }
   if (!hasCommandSpace && "provider".startsWith(command)) return "slash";
   if (!hasCommandSpace && "model".startsWith(command)) return "slash";
   if (!hasCommandSpace && "mode".startsWith(command)) return "slash";
@@ -25,6 +28,11 @@ export function detectPickerKind(input: string): PickerKind | null {
   if (!hasCommandSpace && "path".startsWith(command)) return "slash";
   if (!hasCommandSpace && "compact".startsWith(command)) return "slash";
   if (!hasCommandSpace && "new".startsWith(command)) return "slash";
+  if (!hasCommandSpace && "dev".startsWith(command)) return "slash";
+  if (!hasCommandSpace && "load".startsWith(command)) return "slash";
+  if (!hasCommandSpace && "apply".startsWith(command)) return "slash";
+  if (!hasCommandSpace && "main".startsWith(command)) return "slash";
+  if (!hasCommandSpace && "exit".startsWith(command)) return "slash";
   return null;
 }
 
@@ -34,9 +42,13 @@ function slashCommandQuery(input: string): string {
   return trimmed.slice(1).split(/\s+/u)[0] ?? "";
 }
 
-export function slashOptions(sidebarOpen: boolean, input: string): PickerOption[] {
+export function slashOptions(
+  sidebarOpen: boolean,
+  input: string,
+  devState?: { enabled: boolean; viewingMain: boolean },
+): PickerOption[] {
   const query = slashCommandQuery(input);
-  const options = [
+  const options: PickerOption[] = [
     { label: "/provider", value: "provider", description: "Switch between local provider CLIs" },
     { label: "/model", value: "model", description: "Choose a model from the selected provider" },
     { label: "/options", value: "options", description: "Edit options for the selected model" },
@@ -51,6 +63,43 @@ export function slashOptions(sidebarOpen: boolean, input: string): PickerOption[
     },
     { label: "/mode", value: "mode", description: "Choose build or plan mode" },
   ];
+  if (devState) {
+    if (devState.enabled) {
+      options.push(
+        {
+          label: "/dev off",
+          value: "dev-off",
+          description: "Turn off development controls",
+        },
+        {
+          label: "/load changes",
+          value: "load-changes",
+          description: "Load current source changes into a preview process",
+        },
+      );
+      if (!devState.viewingMain) {
+        options.push(
+          {
+            label: "/apply changes",
+            value: "apply-changes",
+            description: "Promote this preview process to development",
+          },
+          {
+            label: "/main",
+            value: "main-process",
+            description: "Go back to the current development instance",
+          },
+        );
+      }
+    } else {
+      options.push({
+        label: "/dev on",
+        value: "dev-on",
+        description: "Use this process as the development instance",
+      });
+    }
+    options.push({ label: "/exit", value: "exit", description: "Exit development TUI" });
+  }
   return query ? options.filter((option) => option.value.startsWith(query)) : options;
 }
 

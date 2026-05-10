@@ -24,7 +24,35 @@ function isCompactCommand(input: string): boolean {
   return /^\/compact(?:\s*)$/u.test(input.trim());
 }
 
-export function App() {
+interface AppProps {
+  active?: boolean;
+  preserveOnUnmount?: boolean;
+  devActions?: DevActions;
+}
+
+interface DevActions {
+  enabled: boolean;
+  viewingMain: boolean;
+  onEnableDevMode: () => void;
+  onDisableDevMode: () => void;
+  onLoadChanges: () => void;
+  onApplyChanges: () => void;
+  onMain: () => void;
+  onExit: () => void;
+}
+
+function devCommandKind(input: string): "enable" | "disable" | "load" | "apply" | "main" | "exit" | null {
+  const trimmed = input.trim();
+  if (trimmed === "/dev on" || trimmed === "/dev") return "enable";
+  if (trimmed === "/dev off") return "disable";
+  if (trimmed === "/load changes" || trimmed === "/load" || trimmed === "/reload") return "load";
+  if (trimmed === "/apply changes" || trimmed === "/apply") return "apply";
+  if (trimmed === "/main" || trimmed === "/back") return "main";
+  if (trimmed === "/exit") return "exit";
+  return null;
+}
+
+export function App({ active = true, preserveOnUnmount = false, devActions }: AppProps = {}) {
   const defaultState = useMemo(() => createDefaultPersistedState(), []);
   const renderer = useRenderer();
   const [providers, setProviders] = useState<LocalProviderSnapshot[]>([]);
@@ -129,12 +157,13 @@ export function App() {
 
   useEffect(() => {
     return () => {
+      if (preserveOnUnmount) return;
       for (const session of sessionRefs.current.values()) {
         void session.close();
       }
       sessionRefs.current.clear();
     };
-  }, []);
+  }, [preserveOnUnmount]);
 
   useEffect(() => {
     for (const session of sessions) {
@@ -175,7 +204,11 @@ export function App() {
   const options = useMemo(() => {
     switch (pickerKind) {
       case "slash":
-        return slashOptions(sidebarOpen, input);
+        return slashOptions(
+          sidebarOpen,
+          input,
+          devActions ? { enabled: devActions.enabled, viewingMain: devActions.viewingMain } : undefined,
+        );
       case "provider":
         return providerOptions(providers);
       case "model":
@@ -236,6 +269,7 @@ export function App() {
     sessions,
     sidebarOpen,
     pathCompletionAnchor,
+    devActions,
   ]);
 
   useEffect(() => {
@@ -403,6 +437,36 @@ export function App() {
       if (option.value === "sidebar") {
         setSidebarOpen((current) => !current);
         setInput("");
+        return;
+      }
+      if (option.value === "load-changes") {
+        setInput("");
+        devActions?.onLoadChanges();
+        return;
+      }
+      if (option.value === "apply-changes") {
+        setInput("");
+        devActions?.onApplyChanges();
+        return;
+      }
+      if (option.value === "main-process") {
+        setInput("");
+        devActions?.onMain();
+        return;
+      }
+      if (option.value === "exit") {
+        setInput("");
+        devActions?.onExit();
+        return;
+      }
+      if (option.value === "dev-on") {
+        setInput("");
+        devActions?.onEnableDevMode();
+        return;
+      }
+      if (option.value === "dev-off") {
+        setInput("");
+        devActions?.onDisableDevMode();
         return;
       }
       setInput(`/${option.value} `);
@@ -637,6 +701,8 @@ export function App() {
   }
 
   useKeyboard((key) => {
+    if (!active) return;
+
     if (key.ctrl && key.name === "t") {
       setShowToolDetails((current) => {
         const next = !current;
@@ -728,7 +794,7 @@ export function App() {
             ) : (
               <box flexDirection="row" gap={PANEL_GAP}>
                 <input
-                  focused
+                  focused={active}
                   flexGrow={1}
                   backgroundColor={INPUT_BACKGROUND}
                   focusedBackgroundColor={INPUT_BACKGROUND}
@@ -756,6 +822,17 @@ export function App() {
                     }
                     if (/^\/new(?:\s*)$/u.test(trimmed)) {
                       createSession();
+                      return;
+                    }
+                    const devCommand = devActions ? devCommandKind(trimmed) : null;
+                    if (devCommand) {
+                      setInput("");
+                      if (devCommand === "enable") devActions?.onEnableDevMode();
+                      if (devCommand === "disable") devActions?.onDisableDevMode();
+                      if (devCommand === "load") devActions?.onLoadChanges();
+                      if (devCommand === "apply") devActions?.onApplyChanges();
+                      if (devCommand === "main") devActions?.onMain();
+                      if (devCommand === "exit") devActions?.onExit();
                       return;
                     }
                     if (pickerKind) {
