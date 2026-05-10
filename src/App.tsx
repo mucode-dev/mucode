@@ -1,5 +1,5 @@
 import { useKeyboard, useRenderer } from "@opentui/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { PickerPanel } from "./components/PickerPanel.tsx";
 import { SessionSidebar } from "./components/SessionSidebar.tsx";
@@ -11,7 +11,8 @@ import {
   type TuiMode,
 } from "./provider.ts";
 import { CodeSession, type SessionEvent, type SessionStreamKind } from "./session.ts";
-import { createDefaultPersistedState, loadPersistedState, savePersistedState } from "./storage.ts";
+import { SharedSessionProvider, useMaybeSharedSession, useSharedSession } from "./sessionContext.tsx";
+import { loadPersistedState, savePersistedState } from "./storage.ts";
 import type { LocalSessionState, OptionSelectionValue, PickerOption } from "./types.ts";
 import { deriveContextUsage, formatContextUsage, modelContextWindow } from "./ui/context.ts";
 import { defaultOptionSelections, descriptorOptions, detectPickerKind, modeOptions, modelOptions, providerOptions, sessionOptions, slashOptions } from "./ui/options.ts";
@@ -52,32 +53,58 @@ function devCommandKind(input: string): "enable" | "disable" | "load" | "apply" 
   return null;
 }
 
-export function App({ active = true, preserveOnUnmount = false, devActions }: AppProps = {}) {
-  const defaultState = useMemo(() => createDefaultPersistedState(), []);
+export function App(props: AppProps = {}) {
+  const sharedSession = useMaybeSharedSession();
+  if (!sharedSession) {
+    return (
+      <SharedSessionProvider>
+        <AppContent {...props} />
+      </SharedSessionProvider>
+    );
+  }
+  return <AppContent {...props} />;
+}
+
+function AppContent({ active = true, preserveOnUnmount = false, devActions }: AppProps = {}) {
   const renderer = useRenderer();
   const [providers, setProviders] = useState<LocalProviderSnapshot[]>([]);
   const [loadingProviders, setLoadingProviders] = useState(true);
-  const [input, setInput] = useState("");
-  const [mode, setMode] = useState<TuiMode>(defaultState.settings.mode);
-  const [providerId, setProviderId] = useState(defaultState.settings.providerId);
-  const [modelSlug, setModelSlug] = useState(defaultState.settings.modelSlug);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [log, setLog] = useState("");
-  const [activeSessionId, setActiveSessionId] = useState(defaultState.activeSessionId);
-  const [draftWorkingDirectory, setDraftWorkingDirectory] = useState(process.cwd());
-  const [sidebarOpen, setSidebarOpen] = useState(defaultState.sidebarOpen);
-  const [showToolDetails, setShowToolDetails] = useState(false);
-  const [sessions, setSessions] = useState<LocalSessionState[]>(defaultState.sessions);
-  const [activeOptionIndex, setActiveOptionIndex] = useState<number | null>(null);
-  const [hiddenPathInput, setHiddenPathInput] = useState<string | null>(null);
-  const [pathCompletionAnchor, setPathCompletionAnchor] = useState<string | null>(null);
-  const [optionSelections, setOptionSelections] = useState<Record<string, OptionSelectionValue>>(
-    defaultState.settings.optionSelections,
-  );
-  const sessionRefs = useRef(new Map<string, CodeSession>());
-  const programmaticInputRef = useRef(false);
-  const persistenceReadyRef = useRef(false);
-  const persistenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const {
+    input,
+    setInput,
+    mode,
+    setMode,
+    providerId,
+    setProviderId,
+    modelSlug,
+    setModelSlug,
+    selectedIndex,
+    setSelectedIndex,
+    log,
+    setLog,
+    activeSessionId,
+    setActiveSessionId,
+    draftWorkingDirectory,
+    setDraftWorkingDirectory,
+    sidebarOpen,
+    setSidebarOpen,
+    showToolDetails,
+    setShowToolDetails,
+    sessions,
+    setSessions,
+    activeOptionIndex,
+    setActiveOptionIndex,
+    hiddenPathInput,
+    setHiddenPathInput,
+    pathCompletionAnchor,
+    setPathCompletionAnchor,
+    optionSelections,
+    setOptionSelections,
+    sessionRefs,
+    programmaticInputRef,
+    persistenceReadyRef,
+    persistenceTimerRef,
+  } = useSharedSession();
 
   useEffect(() => {
     let alive = true;
@@ -178,7 +205,12 @@ export function App({ active = true, preserveOnUnmount = false, devActions }: Ap
   const optionDescriptors = selectedModel?.capabilities?.optionDescriptors ?? [];
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   const activeWorkingDirectory = activeSession?.workingDirectory ?? draftWorkingDirectory;
-  const activeContextMaxTokens = modelContextWindow(providerId, modelSlug, optionSelections);
+  const activeContextMaxTokens = modelContextWindow(
+    providerId,
+    modelSlug,
+    optionSelections,
+    selectedModel?.contextWindow,
+  );
   const activeContextUsage = deriveContextUsage(
     activeSession,
     activeContextMaxTokens,
@@ -273,8 +305,9 @@ export function App({ active = true, preserveOnUnmount = false, devActions }: Ap
   ]);
 
   useEffect(() => {
-    setSelectedIndex(0);
-  }, [activeOptionIndex, pickerKind, providerId]);
+    const firstSelectableIndex = options.findIndex((option) => !option.disabled);
+    setSelectedIndex(firstSelectableIndex >= 0 ? firstSelectableIndex : 0);
+  }, [activeOptionIndex, options.length, pickerKind, providerId]);
 
   function openFirstModelOption(model: ServerProviderModel | undefined) {
     const descriptors = model?.capabilities?.optionDescriptors ?? [];
@@ -634,6 +667,7 @@ export function App({ active = true, preserveOnUnmount = false, devActions }: Ap
     try {
       await harness.submitTurn({
         provider: selectedProvider.driver,
+        apiProviderId: selectedProvider.apiProviderId,
         prompt,
         model: modelSlug,
         mode,
@@ -659,6 +693,7 @@ export function App({ active = true, preserveOnUnmount = false, devActions }: Ap
     try {
       await harness.compactSession({
         provider: selectedProvider.driver,
+        apiProviderId: selectedProvider.apiProviderId,
         model: modelSlug,
         cwd: workingDirectory,
         onEvent: (event) => handleSessionEvent(sessionId, event),

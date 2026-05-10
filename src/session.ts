@@ -1,8 +1,18 @@
+import { Agent, type AgentEvent, type AgentTool } from "@earendil-works/pi-agent-core";
+import {
+  getEnvApiKey,
+  getModel,
+  Type,
+  type KnownProvider,
+  type Model as PiModel,
+} from "@earendil-works/pi-ai";
 import {
   createOpencodeClient,
   createOpencodeServer,
   type OpencodeClient,
 } from "@opencode-ai/sdk/v2";
+import { readdir, stat } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 
 import type { ProviderDriverKind, TuiMode } from "./provider.ts";
 
@@ -38,6 +48,7 @@ export interface TokenUsageSnapshot {
 
 export interface SubmitTurnInput {
   provider: ProviderDriverKind;
+  apiProviderId?: KnownProvider;
   prompt: string;
   model: string;
   mode: TuiMode;
@@ -48,6 +59,7 @@ export interface SubmitTurnInput {
 
 export interface CompactSessionInput {
   provider: ProviderDriverKind;
+  apiProviderId?: KnownProvider;
   model: string;
   cwd: string;
   onEvent: (event: SessionEvent) => void;
@@ -100,17 +112,37 @@ type OpenCodeParsedEvent =
   | SessionEvent
   | { type: "session"; sessionId: string };
 
+type PiToolDetails = {
+  text?: string;
+  command?: string;
+  path?: string;
+  exitCode?: number;
+};
+
+const PI_AGENT_SYSTEM_PROMPT = `You are a pragmatic coding agent running inside a terminal UI.
+Work in the user's selected working directory. Use tools to inspect files before making changes.
+Keep responses concise. When you change files, summarize the exact files and verification performed.
+In plan mode, propose a concise implementation plan and do not edit files or run mutating commands.`;
+
 export class CodeSession {
   private codex: CodexAppServerSession | null = null;
   private readonly openCode = new OpenCodeCliSession();
+  private readonly piAgent = new PiAgentSession();
 
   async submitTurn(input: SubmitTurnInput): Promise<void> {
     if (input.provider === "opencode") {
       await this.openCode.sendTurn(input);
       return;
     }
+    if (input.provider === "piAi") {
+      await this.piAgent.sendTurn(input);
+      return;
+    }
     if (input.provider !== "codex") {
-      input.onEvent({ type: "error", message: "Submit is currently wired for Codex and OpenCode." });
+      input.onEvent({
+        type: "error",
+        message: "Submit is currently wired for Codex, OpenCode, and pi agent providers.",
+      });
       return;
     }
 
@@ -125,6 +157,10 @@ export class CodeSession {
   async compactSession(input: CompactSessionInput): Promise<void> {
     if (input.provider === "opencode") {
       await this.openCode.compact(input);
+      return;
+    }
+    if (input.provider === "piAi") {
+      this.piAgent.compact(input);
       return;
     }
     if (input.provider !== "codex") {
@@ -146,7 +182,326 @@ export class CodeSession {
     this.codex = null;
     await current?.close();
     await this.openCode.close();
+    this.piAgent.close();
   }
+}
+
+class PiAgentSession {
+  private agent: Agent | null = null;
+  private providerId: KnownProvider | null = null;
+  private modelId: string | null = null;
+  private cwd = process.cwd();
+  private readonly sessionId = `pi-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  async sendTurn(input: SubmitTurnInput): Promise<void> {
+    if (!input.apiProviderId) {
+      input.onEvent({ type: "error", message: "No pi-ai provider was selected." });
+      return;
+    }
+
+    const model = getModel(input.apiProviderId, input.model as never) as PiModel<string> | undefined;
+    if (!model) {
+      input.onEvent({
+        type: "error",
+        message: `Model ${input.model} was not found for ${input.apiProviderId}.`,
+      });
+      return;
+    }
+
+    this.cwd = input.cwd;
+    const agent = this.ensureAgent(input.apiProviderId, input.model, model, input.options);
+    agent.state.model = model;
+    agent.state.thinkingLevel = piThinkingLevel(input.options);
+    agent.state.tools = createPiAgentTools(() => this.cwd, input.mode);
+
+    const unsubscribe = agent.subscribe((event) => {
+      translatePiAgentEvent(event, input.onEvent);
+    });
+
+    input.onEvent({ type: "status", status: "starting", message: `Starting ${model.provider} agent` });
+    try {
+      const prompt =
+        input.mode === "plan"
+          ? `Plan mode: propose a concise implementation plan only. Do not edit files yet.\n\n${input.prompt}`
+          : input.prompt;
+      await agent.prompt(prompt);
+      input.onEvent({ type: "status", status: "ready", message: `${model.name} turn completed` });
+    } catch (error) {
+      input.onEvent({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      unsubscribe();
+    }
+  }
+
+  compact(input: CompactSessionInput): void {
+    if (!this.agent || this.agent.state.messages.length === 0) {
+      input.onEvent({ type: "error", message: "No pi agent session to compact yet." });
+      return;
+    }
+    const messages = this.agent.state.messages;
+    const lastMessages = messages.slice(-8);
+    this.agent.state.messages = lastMessages;
+    input.onEvent({ type: "compacted", automatic: false });
+  }
+
+  close(): void {
+    this.agent?.abort();
+    this.agent = null;
+  }
+
+  private ensureAgent(
+    providerId: KnownProvider,
+    modelId: string,
+    model: PiModel<string>,
+    options: Record<string, string | boolean>,
+  ): Agent {
+    if (!this.agent) {
+      this.providerId = providerId;
+      this.modelId = modelId;
+      this.agent = new Agent({
+        initialState: {
+          systemPrompt: PI_AGENT_SYSTEM_PROMPT,
+          model,
+          thinkingLevel: piThinkingLevel(options),
+          tools: createPiAgentTools(() => this.cwd, "build"),
+        },
+        getApiKey: (provider) => getEnvApiKey(provider),
+        sessionId: this.sessionId,
+        toolExecution: "sequential",
+      });
+      return this.agent;
+    }
+
+    this.providerId = providerId;
+    this.modelId = modelId;
+    return this.agent;
+  }
+}
+
+function piThinkingLevel(options: Record<string, string | boolean>) {
+  const value = options.reasoning;
+  return value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh"
+    ? value
+    : "off";
+}
+
+function createPiAgentTools(getCwd: () => string, mode: TuiMode): AgentTool[] {
+  const allowMutation = mode === "build";
+  return [
+    {
+      name: "list_directory",
+      label: "List directory",
+      description: "List files and folders in a directory.",
+      parameters: Type.Object({
+        path: Type.Optional(Type.String({ description: "Directory path. Relative paths resolve from the working directory." })),
+      }),
+      execute: async (_toolCallId, params) => {
+        const args = params as { path?: string };
+        const target = resolveToolPath(getCwd(), args.path);
+        const entries = await readdir(target);
+        const rows = await Promise.all(
+          entries.slice(0, 200).map(async (entry) => {
+            const entryPath = resolve(target, entry);
+            const info = await stat(entryPath).catch(() => null);
+            return `${info?.isDirectory() ? "dir " : "file"} ${entry}`;
+          }),
+        );
+        return piTextResult(rows.join("\n") || "(empty)", { path: target });
+      },
+    },
+    {
+      name: "read_file",
+      label: "Read file",
+      description: "Read a UTF-8 text file.",
+      parameters: Type.Object({
+        path: Type.String({ description: "File path. Relative paths resolve from the working directory." }),
+      }),
+      execute: async (_toolCallId, params) => {
+        const args = params as { path: string };
+        const target = resolveToolPath(getCwd(), args.path);
+        const text = await Bun.file(target).text();
+        return piTextResult(text.slice(0, 80_000), { path: target });
+      },
+    },
+    {
+      name: "write_file",
+      label: "Write file",
+      description: "Write a UTF-8 text file. Only available in build mode.",
+      parameters: Type.Object({
+        path: Type.String({ description: "File path. Relative paths resolve from the working directory." }),
+        content: Type.String({ description: "Full file content to write." }),
+      }),
+      execute: async (_toolCallId, params) => {
+        const args = params as { path: string; content: string };
+        if (!allowMutation) throw new Error("write_file is disabled in plan mode.");
+        const target = resolveToolPath(getCwd(), args.path);
+        await Bun.write(target, args.content);
+        return piTextResult(`Wrote ${args.content.length} bytes to ${target}`, { path: target });
+      },
+      executionMode: "sequential",
+    },
+    {
+      name: "run_shell_command",
+      label: "Run shell command",
+      description: "Run a shell command in the working directory. Mutating commands are only allowed in build mode.",
+      parameters: Type.Object({
+        command: Type.String({ description: "Command to run." }),
+        timeoutMs: Type.Optional(Type.Number({ description: "Timeout in milliseconds, default 30000." })),
+      }),
+      execute: async (_toolCallId, params, signal) => {
+        const args = params as { command: string; timeoutMs?: number };
+        if (!allowMutation && mayMutateShell(args.command)) {
+          throw new Error("Mutating shell commands are disabled in plan mode.");
+        }
+        const result = await runShellCommand(args.command, getCwd(), args.timeoutMs, signal);
+        return piTextResult(result.text, {
+          command: args.command,
+          exitCode: result.exitCode,
+        });
+      },
+      executionMode: "sequential",
+    },
+  ];
+}
+
+function resolveToolPath(cwd: string, pathValue: string | undefined): string {
+  if (!pathValue || pathValue.trim() === "") return cwd;
+  return isAbsolute(pathValue) ? pathValue : resolve(cwd, pathValue);
+}
+
+function piTextResult(text: string, details: PiToolDetails = {}) {
+  return {
+    content: [{ type: "text" as const, text }],
+    details: { ...details, text },
+  };
+}
+
+function mayMutateShell(command: string): boolean {
+  return /\b(rm|mv|cp|chmod|chown|mkdir|rmdir|touch|tee|sed\s+-i|perl\s+-pi|git\s+(?:add|commit|checkout|reset|clean|merge|rebase|pull|push)|bun\s+(?:add|remove|install)|npm\s+(?:install|i|uninstall|remove)|pnpm\s+(?:add|remove|install)|yarn\s+(?:add|remove|install))\b/u.test(command);
+}
+
+async function runShellCommand(
+  command: string,
+  cwd: string,
+  timeoutMs: number | undefined,
+  signal: AbortSignal | undefined,
+): Promise<{ exitCode: number; text: string }> {
+  const proc = Bun.spawn(["/bin/zsh", "-lc", command], {
+    cwd,
+    env: process.env,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const timeout = setTimeout(() => proc.kill(), Math.max(1_000, timeoutMs ?? 30_000));
+  const abort = () => proc.kill();
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    const text = [
+      stdout ? `stdout:\n${stdout}` : "",
+      stderr ? `stderr:\n${stderr}` : "",
+      `exit code: ${exitCode}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    return { exitCode, text: text.slice(0, 80_000) };
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
+function translatePiAgentEvent(event: AgentEvent, onEvent: (event: SessionEvent) => void): void {
+  if (event.type === "agent_start") {
+    onEvent({ type: "status", status: "running", message: "Running pi agent" });
+    return;
+  }
+  if (event.type === "message_update") {
+    const update = event.assistantMessageEvent;
+    if (update.type === "text_delta") {
+      onEvent({ type: "delta", text: update.delta });
+      return;
+    }
+    if (update.type === "thinking_delta") {
+      onEvent({ type: "stream", stream: "thinking", text: update.delta });
+      return;
+    }
+    if (update.type === "toolcall_start") {
+      onEvent({
+        type: "work",
+        id: `pi-toolcall-${update.contentIndex}`,
+        label: "Preparing tool call",
+        status: "started",
+      });
+      return;
+    }
+  }
+  if (event.type === "message_end" && event.message.role === "assistant") {
+    const usage = event.message.usage;
+    onEvent({
+      type: "usage",
+      usage: {
+        usedTokens: usage.totalTokens,
+        inputTokens: usage.input,
+        cachedInputTokens: usage.cacheRead,
+        outputTokens: usage.output,
+        lastUsedTokens: usage.totalTokens,
+      },
+    });
+    if (event.message.errorMessage) {
+      onEvent({ type: "error", message: event.message.errorMessage });
+    }
+    return;
+  }
+  if (event.type === "tool_execution_start") {
+    onEvent({
+      type: "work",
+      id: event.toolCallId,
+      label: event.toolName,
+      detail: JSON.stringify(event.args),
+      status: "started",
+    });
+    return;
+  }
+  if (event.type === "tool_execution_update") {
+    onEvent({
+      type: "work",
+      id: event.toolCallId,
+      label: event.toolName,
+      detail: piToolDetail(event.partialResult),
+      status: "running",
+    });
+    return;
+  }
+  if (event.type === "tool_execution_end") {
+    onEvent({
+      type: "work",
+      id: event.toolCallId,
+      label: event.toolName,
+      detail: piToolDetail(event.result),
+      status: event.isError ? "failed" : "completed",
+    });
+  }
+}
+
+function piToolDetail(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const details = isRecord(value.details) ? value.details : value;
+  if (typeof details.command === "string" && typeof details.exitCode === "number") {
+    return `${details.command} -> ${details.exitCode}`;
+  }
+  if (typeof details.path === "string") return details.path;
+  if (typeof details.text === "string") return details.text.slice(0, 500);
+  return undefined;
 }
 
 class OpenCodeCliSession {

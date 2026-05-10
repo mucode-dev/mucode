@@ -119,14 +119,38 @@ export function modeOptions(mode: TuiMode): PickerOption[] {
 }
 
 export function providerOptions(providers: LocalProviderSnapshot[]): PickerOption[] {
-  return providers.map((provider) => ({
+  const platformProviders = providers.filter((provider) => provider.group === "platform");
+  const apiProviders = providers.filter((provider) => provider.group === "api");
+  return [
+    providerGroupTitle("Current providers"),
+    ...platformProviders.map(providerOption),
+    providerGroupTitle("API / OAuth providers"),
+    ...apiProviders.map(providerOption),
+  ];
+}
+
+function providerGroupTitle(label: string): PickerOption {
+  return {
+    label,
+    value: `__group__:${label}`,
+    description: "",
+    disabled: true,
+    groupTitle: true,
+  };
+}
+
+function providerOption(provider: LocalProviderSnapshot): PickerOption {
+  return {
     label: provider.displayName,
     value: provider.instanceId,
     description: provider.installed
-      ? `${provider.version ?? "installed"} · ${provider.models.length} models`
+      ? [
+          provider.enabled ? provider.version ?? "configured" : provider.message ?? "not configured",
+          `${provider.models.length} models`,
+        ].join(" · ")
       : provider.message ?? "Not installed",
-    disabled: !provider.installed,
-  }));
+    disabled: !provider.installed || !provider.enabled,
+  };
 }
 
 export function modelOptions(models: ServerProviderModel[]): PickerOption[] {

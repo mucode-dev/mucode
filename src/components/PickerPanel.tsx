@@ -26,11 +26,19 @@ export function PickerPanel({
           <text
             key={`${option.value}-${index}`}
             fg={
-              option.disabled ? "#64748B" : index === selectedIndex ? "#0F172A" : "#E2E8F0"
+              option.groupTitle
+                ? "#FDE68A"
+                : option.disabled
+                  ? "#64748B"
+                  : index === selectedIndex
+                    ? "#0F172A"
+                    : "#E2E8F0"
             }
-            bg={index === selectedIndex ? "#A7F3D0" : undefined}
+            bg={!option.groupTitle && index === selectedIndex ? "#A7F3D0" : undefined}
           >
-            {pickerKind === "path"
+            {option.groupTitle
+              ? option.label
+              : pickerKind === "path"
               ? `${index === selectedIndex ? "> " : "  "}${option.description || option.label}`
               : `${index === selectedIndex ? "> " : "  "}${option.label.padEnd(16)} ${option.description}`}
           </text>

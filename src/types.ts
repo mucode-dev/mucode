@@ -38,4 +38,5 @@ export interface PickerOption {
   description: string;
   value: string;
   disabled?: boolean;
+  groupTitle?: boolean;
 }

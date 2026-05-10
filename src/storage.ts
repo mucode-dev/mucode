@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import type { ProviderDriverKind, TuiMode } from "./provider.ts";
+import type { ProviderInstanceId, TuiMode } from "./provider.ts";
 import type { SessionCodeBlock, SessionStatus } from "./session.ts";
 
 export interface PersistedSession {
@@ -29,7 +29,7 @@ export interface PersistedState {
   activeSessionId: string;
   sidebarOpen: boolean;
   settings: {
-    providerId: ProviderDriverKind;
+    providerId: string;
     modelSlug: string;
     mode: TuiMode;
     optionSelections: Record<string, string | boolean>;
@@ -186,7 +186,7 @@ function readLegacyDbSettings(db: Database): Partial<PersistedState> | null {
     | {
         activeSessionId: string;
         sidebarOpen: number;
-        providerId: ProviderDriverKind;
+        providerId: string;
         modelSlug: string;
         mode: TuiMode;
         optionSelectionsJson: string;
@@ -404,8 +404,13 @@ function isEmptyNumberedSession(session: PersistedSession): boolean {
   return /^(?:Session \d+|Untitled chat)$/u.test(session.title.trim()) && session.output.trim() === "";
 }
 
-function isProviderId(value: unknown): value is ProviderDriverKind {
-  return value === "codex" || value === "claudeAgent" || value === "opencode";
+function isProviderId(value: unknown): value is ProviderInstanceId {
+  return (
+    value === "codex" ||
+    value === "claudeAgent" ||
+    value === "opencode" ||
+    (typeof value === "string" && value.startsWith("pi:"))
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

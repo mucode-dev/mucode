@@ -33,7 +33,11 @@ export function modelContextWindow(
   providerId: string,
   modelSlug: string,
   selections: Record<string, OptionSelectionValue>,
+  modelContextWindow?: number,
 ): number | null {
+  if (typeof modelContextWindow === "number" && Number.isFinite(modelContextWindow)) {
+    return modelContextWindow;
+  }
   const selectedWindow = selections.contextWindow;
   if (selectedWindow === "1m") return 1_000_000;
   if (selectedWindow === "200k") return 200_000;

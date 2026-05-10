@@ -1,4 +1,17 @@
-export type ProviderDriverKind = "codex" | "claudeAgent" | "opencode";
+import {
+  findEnvKeys,
+  getEnvApiKey,
+  getModels,
+  getProviders,
+  getSupportedThinkingLevels,
+  type KnownProvider,
+  type Model as PiModel,
+} from "@earendil-works/pi-ai";
+
+export type ProviderDriverKind = "codex" | "claudeAgent" | "opencode" | "piAi";
+export type PlatformProviderDriverKind = Exclude<ProviderDriverKind, "piAi">;
+export type ProviderInstanceId = PlatformProviderDriverKind | `pi:${KnownProvider}`;
+export type ProviderGroup = "platform" | "api";
 export type TuiMode = "build" | "plan";
 
 export interface ProviderOptionChoice {
@@ -21,14 +34,17 @@ export interface ServerProviderModel {
   shortName?: string;
   subProvider?: string;
   isCustom: boolean;
+  contextWindow?: number;
   capabilities: {
     optionDescriptors: ProviderOptionDescriptor[];
   } | null;
 }
 
 export interface LocalProviderSnapshot {
-  instanceId: ProviderDriverKind;
+  instanceId: ProviderInstanceId;
   driver: ProviderDriverKind;
+  group: ProviderGroup;
+  apiProviderId?: KnownProvider;
   displayName: string;
   enabled: boolean;
   installed: boolean;
@@ -94,17 +110,19 @@ export async function loadLocalProviders(): Promise<LocalProviderSnapshot[]> {
     probeProvider("claudeAgent", "claude", CLAUDE_MODELS),
     probeOpenCode(),
   ]);
-  return [codex, claude, opencode];
+  return [codex, claude, opencode, ...loadPiApiProviders()];
 }
 
 function model(
   slug: string,
   name: string,
   optionDescriptors: ProviderOptionDescriptor[] = [],
+  metadata: Pick<ServerProviderModel, "contextWindow" | "subProvider"> = {},
 ): ServerProviderModel {
   return {
     slug,
     name,
+    ...metadata,
     isCustom: false,
     capabilities: { optionDescriptors },
   };
@@ -134,18 +152,20 @@ function booleanOption(id: string, label: string): ProviderOptionDescriptor {
 }
 
 async function probeProvider(
-  driver: ProviderDriverKind,
+  driver: PlatformProviderDriverKind,
   binary: string,
   models: ServerProviderModel[],
 ): Promise<LocalProviderSnapshot> {
   const path = await commandOutput(["/bin/zsh", "-lc", `command -v ${binary}`], 1_500);
   const installed = path.ok && path.stdout.trim().length > 0;
   const version = installed ? await commandOutput([binary, "--version"], 2_500) : null;
-  const displayName = driver === "claudeAgent" ? "Claude" : titleCase(driver);
+  const displayName =
+    driver === "claudeAgent" ? "Claude Code" : driver === "opencode" ? "OpenCode" : titleCase(driver);
 
   return {
     instanceId: driver,
     driver,
+    group: "platform",
     displayName,
     enabled: installed,
     installed,
@@ -154,6 +174,47 @@ async function probeProvider(
     message: installed ? undefined : `${displayName} CLI is not installed or not on PATH.`,
     models,
   };
+}
+
+function loadPiApiProviders(): LocalProviderSnapshot[] {
+  return getProviders().map((provider) => {
+    const envKeys = findEnvKeys(provider) ?? [];
+    const models = getModels(provider).map(mapPiModel);
+    const expectedAuth = providerAuthLabel(provider);
+    const configured = envKeys.length > 0 || getEnvApiKey(provider) !== undefined;
+
+    return {
+      instanceId: `pi:${provider}`,
+      driver: "piAi",
+      group: "api",
+      apiProviderId: provider,
+      displayName: piProviderDisplayName(provider),
+      enabled: configured,
+      installed: true,
+      version: null,
+      status: configured ? "ready" : "warning",
+      message: configured
+        ? `Configured with ${envKeys.join(", ") || expectedAuth}.`
+        : `${expectedAuth} not found.`,
+      models,
+    };
+  });
+}
+
+function mapPiModel(piModel: PiModel<string>): ServerProviderModel {
+  const thinkingLevels = getSupportedThinkingLevels(piModel);
+  const defaultThinking = thinkingLevels.includes("medium") ? "medium" : thinkingLevels[0] ?? "off";
+  return model(
+    piModel.id,
+    piModel.name,
+    thinkingLevels.length > 1
+      ? [select("reasoning", "Reasoning", thinkingLevels, defaultThinking)]
+      : [],
+    {
+      subProvider: `${piModel.provider} · ${piModel.api}`,
+      contextWindow: piModel.contextWindow,
+    },
+  );
 }
 
 async function probeCodex(): Promise<LocalProviderSnapshot> {
@@ -415,6 +476,74 @@ function titleCase(value: string): string {
       return part.charAt(0).toUpperCase() + part.slice(1);
     })
     .join(" ");
+}
+
+function piProviderDisplayName(provider: KnownProvider): string {
+  const overrides: Partial<Record<KnownProvider, string>> = {
+    "amazon-bedrock": "Amazon Bedrock",
+    "azure-openai-responses": "Azure OpenAI",
+    "cloudflare-ai-gateway": "Cloudflare AI Gateway",
+    "cloudflare-workers-ai": "Cloudflare Workers AI",
+    "github-copilot": "GitHub Copilot",
+    "google-vertex": "Vertex AI",
+    "kimi-coding": "Kimi For Coding",
+    "minimax-cn": "MiniMax CN",
+    moonshotai: "Moonshot AI",
+    "moonshotai-cn": "Moonshot AI CN",
+    "openai-codex": "OpenAI Codex OAuth",
+    opencode: "OpenCode Zen",
+    "opencode-go": "OpenCode Go",
+    "vercel-ai-gateway": "Vercel AI Gateway",
+    "xiaomi-token-plan-ams": "Xiaomi Token Plan AMS",
+    "xiaomi-token-plan-cn": "Xiaomi Token Plan CN",
+    "xiaomi-token-plan-sgp": "Xiaomi Token Plan SGP",
+    xai: "xAI",
+    zai: "Z.ai",
+  };
+  return overrides[provider] ?? titleCase(provider);
+}
+
+function providerAuthLabel(provider: KnownProvider): string {
+  const authLabels: Partial<Record<KnownProvider, string>> = {
+    "amazon-bedrock": "AWS credentials",
+    "github-copilot": "GitHub OAuth token",
+    "google-vertex": "GOOGLE_CLOUD_API_KEY or Google ADC",
+    "openai-codex": "ChatGPT OAuth token",
+  };
+  return authLabels[provider] ?? piProviderEnvName(provider);
+}
+
+function piProviderEnvName(provider: KnownProvider): string {
+  const envNames: Partial<Record<KnownProvider, string>> = {
+    anthropic: "ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN",
+    "azure-openai-responses": "AZURE_OPENAI_API_KEY",
+    cerebras: "CEREBRAS_API_KEY",
+    "cloudflare-ai-gateway": "CLOUDFLARE_API_KEY",
+    "cloudflare-workers-ai": "CLOUDFLARE_API_KEY",
+    deepseek: "DEEPSEEK_API_KEY",
+    fireworks: "FIREWORKS_API_KEY",
+    google: "GEMINI_API_KEY",
+    groq: "GROQ_API_KEY",
+    huggingface: "HF_TOKEN",
+    "kimi-coding": "KIMI_API_KEY",
+    mistral: "MISTRAL_API_KEY",
+    minimax: "MINIMAX_API_KEY",
+    "minimax-cn": "MINIMAX_CN_API_KEY",
+    moonshotai: "MOONSHOT_API_KEY",
+    "moonshotai-cn": "MOONSHOT_API_KEY",
+    openai: "OPENAI_API_KEY",
+    opencode: "OPENCODE_API_KEY",
+    "opencode-go": "OPENCODE_API_KEY",
+    openrouter: "OPENROUTER_API_KEY",
+    "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
+    xai: "XAI_API_KEY",
+    xiaomi: "XIAOMI_API_KEY",
+    "xiaomi-token-plan-ams": "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
+    "xiaomi-token-plan-cn": "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+    "xiaomi-token-plan-sgp": "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
+    zai: "ZAI_API_KEY",
+  };
+  return envNames[provider] ?? titleCase(provider);
 }
 
 function formatCodexDisplayName(value: string): string {
