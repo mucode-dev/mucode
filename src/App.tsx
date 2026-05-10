@@ -17,7 +17,7 @@ import { deriveContextUsage, formatContextUsage, modelContextWindow } from "./ui
 import { defaultOptionSelections, descriptorOptions, detectPickerKind, modeOptions, modelOptions, providerOptions, sessionOptions, slashOptions } from "./ui/options.ts";
 import { commonPrefixLength, parsePathCommand, pathInputForOption, pathOptions, resolveWorkingDirectory } from "./ui/path.ts";
 import { renderSessionOutput } from "./ui/sessionOutput.tsx";
-import { APP_BACKGROUND, PANEL_BACKGROUND, PANEL_GAP, PANEL_PADDING } from "./ui/theme.ts";
+import { APP_BACKGROUND, INPUT_BACKGROUND, PANEL_BACKGROUND, PANEL_GAP, PANEL_PADDING } from "./ui/theme.ts";
 import { closeActiveStreamFence, escapeMarkdownInline, formatStreamDelta, streamFenceLanguage, streamHeading, workBlockMarker } from "./ui/transcript.ts";
 
 function isCompactCommand(input: string): boolean {
@@ -699,7 +699,7 @@ export function App() {
         {sidebarOpen ? <SessionSidebar activeSessionId={activeSessionId} sessions={sessions} /> : null}
         {sidebarOpen ? <box width={PANEL_GAP} /> : null}
 
-        <box flexDirection="column" flexGrow={1}>
+        <box flexDirection="column" flexGrow={1} backgroundColor={PANEL_BACKGROUND}>
           <box flexGrow={1} flexDirection="column">
             {pickerKind ? (
               <PickerPanel
@@ -717,8 +717,7 @@ export function App() {
             )}
           </box>
 
-          <box height={PANEL_GAP} />
-          <box padding={PANEL_PADDING} height={3} backgroundColor={PANEL_BACKGROUND}>
+          <box padding={PANEL_PADDING} height={3} backgroundColor={INPUT_BACKGROUND}>
             {showingPathPreview ? (
               <box flexDirection="row">
                 <text fg="#F8FAFC">{input.slice(0, pathPreviewPrefixLength)}</text>
@@ -731,8 +730,8 @@ export function App() {
                 <input
                   focused
                   flexGrow={1}
-                  backgroundColor={PANEL_BACKGROUND}
-                  focusedBackgroundColor={PANEL_BACKGROUND}
+                  backgroundColor={INPUT_BACKGROUND}
+                  focusedBackgroundColor={INPUT_BACKGROUND}
                   textColor="#E2E8F0"
                   focusedTextColor="#F8FAFC"
                   placeholderColor="#64748B"
@@ -778,7 +777,6 @@ export function App() {
             )}
           </box>
 
-          <box height={PANEL_GAP} />
           <StatusBar
             activeContextLabel={activeContextLabel}
             activeContextUsage={activeContextUsage}
@@ -793,6 +791,7 @@ export function App() {
             status={activeSession?.status ?? "idle"}
             workingDirectory={activeWorkingDirectory}
           />
+          <box height={PANEL_GAP} />
         </box>
       </box>
     </box>

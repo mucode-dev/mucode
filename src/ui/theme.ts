@@ -2,6 +2,7 @@ import { RGBA, SyntaxStyle } from "@opentui/core";
 
 export const APP_BACKGROUND = "#020617";
 export const PANEL_BACKGROUND = "#0F172A";
+export const INPUT_BACKGROUND = "#111827";
 export const PANEL_GAP = 1;
 export const PANEL_PADDING = 1;
 
