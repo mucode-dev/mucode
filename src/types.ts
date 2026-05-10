@@ -26,6 +26,7 @@ export interface LocalSessionState {
 }
 
 export interface SessionWorkBlock {
+  eventId?: string;
   label: string;
   detail?: string;
   status?: "started" | "running" | "completed" | "failed";

@@ -309,20 +309,29 @@ export function App() {
     setSessions((current) =>
       current.map((session) => {
         if (session.id !== sessionId) return session;
-        const blockId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const existingEntry = event.id
+          ? Object.entries(session.workBlocks ?? {}).find(([, block]) => block.eventId === event.id)
+          : undefined;
+        const blockId = existingEntry?.[0] ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const previousBlock = existingEntry?.[1];
+        const nextBlock = {
+          ...(previousBlock ?? {}),
+          ...(event.id ? { eventId: event.id } : {}),
+          label: event.label,
+          ...(event.detail ? { detail: event.detail } : {}),
+          ...(event.status ? { status: event.status } : {}),
+          ...(event.code ? { code: event.code } : {}),
+        };
         return {
           ...session,
-          output: `${session.output}${closeActiveStreamFence(session.activeStreamKind)}${workBlockMarker(blockId)}`,
+          output: existingEntry
+            ? session.output
+            : `${session.output}${closeActiveStreamFence(session.activeStreamKind)}${workBlockMarker(blockId)}`,
           workBlocks: {
             ...(session.workBlocks ?? {}),
-            [blockId]: {
-              label: event.label,
-              ...(event.detail ? { detail: event.detail } : {}),
-              ...(event.status ? { status: event.status } : {}),
-              ...(event.code ? { code: event.code } : {}),
-            },
+            [blockId]: nextBlock,
           },
-          activeStreamKind: undefined,
+          activeStreamKind: existingEntry ? session.activeStreamKind : undefined,
           lastActiveAt: Date.now(),
         };
       }),

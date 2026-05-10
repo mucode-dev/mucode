@@ -63,7 +63,7 @@ function renderMarkdownPart(content: string, key: string, streaming: boolean) {
       streaming={streaming}
       conceal
       concealCode
-      internalBlockMode="top-level"
+      internalBlockMode={streaming ? "top-level" : "coalesced"}
       renderNode={renderMarkdownNode}
       tableOptions={{
         style: "columns",
@@ -93,7 +93,11 @@ function renderWorkBlock(block: SessionWorkBlock, blockId: string, showDetails =
       <box flexDirection="row" gap={1}>
         <text fg={accent}>{workStatusPrefix(block.status)}</text>
         <text fg="#E2E8F0">{summary.title}</text>
-        {summary.target ? <text fg="#94A3B8">{summary.target}</text> : null}
+        {summary.meta.map((item, index) => (
+          <text key={`${blockId}-meta-${index}`} fg={index === 0 ? "#94A3B8" : "#64748B"}>
+            {item}
+          </text>
+        ))}
         {block.status ? <text fg={accent}>{block.status}</text> : null}
       </box>
       {showDetails ? (
@@ -119,11 +123,17 @@ function renderWorkBlock(block: SessionWorkBlock, blockId: string, showDetails =
 function workBlockSummary(block: SessionWorkBlock, detailLines: string[]) {
   const cleanLabel = block.label.replace(/^Tool call:\s*/u, "").trim();
   const tool = detailValue(detailLines, "tool") ?? cleanLabel;
-  const title = detailValue(detailLines, "title") ?? (block.code ? executionBlockTitle(block.code) : null);
-  const target = title && title !== tool ? title : null;
+  const title = detailValue(detailLines, "title");
+  const detailObject = detailObjectFromLines(detailLines);
+  const meta = compactWorkMetadata({
+    tool,
+    title,
+    block,
+    detailObject,
+  });
   return {
     title: actionLabel(tool),
-    target,
+    meta,
   };
 }
 
@@ -138,6 +148,122 @@ function detailValue(lines: string[], key: string): string | null {
   const line = lines.find((candidate) => candidate.startsWith(prefix));
   const value = line?.slice(prefix.length).trim();
   return value || null;
+}
+
+function detailObjectFromLines(lines: string[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const line of lines) {
+    const separator = line.indexOf(":");
+    if (separator < 0) continue;
+    const key = line.slice(0, separator).trim();
+    const rawValue = line.slice(separator + 1).trim();
+    if (!key || !rawValue) continue;
+    result[key] = parseMaybeJson(rawValue);
+  }
+  return result;
+}
+
+function compactWorkMetadata(input: {
+  tool: string;
+  title: string | null;
+  block: SessionWorkBlock;
+  detailObject: Record<string, unknown>;
+}): string[] {
+  const args = asRecord(input.detailObject.args);
+  const path =
+    firstString(input.detailObject.path, fieldValue(args, ["file_path", "filepath", "path"])) ??
+    codePath(input.block.code);
+  const pattern = firstString(
+    fieldValue(args, ["pattern", "glob", "query"]),
+    fieldValue(args, ["include", "regex"]),
+  );
+  const command = firstString(input.detailObject.command, fieldValue(args, ["command", "cmd"]));
+  const title = input.title && input.title !== input.tool ? input.title : null;
+  const output = outputMetadata(firstString(input.detailObject.output, input.detailObject.summary));
+
+  return uniqueNonEmpty([
+    title,
+    path,
+    pattern ? quoteIfNeeded(pattern) : null,
+    command ? quoteIfNeeded(command) : null,
+    output,
+  ]).slice(0, 3);
+}
+
+function codePath(block: SessionCodeBlock | undefined): string | null {
+  if (!block) return null;
+  return block.path ?? (block.title && block.title !== "Code" && block.title !== "Diff" ? block.title : null);
+}
+
+function outputMetadata(value: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const matchCount = /\b(\d+)\s+matches?\b/iu.exec(trimmed)?.[0];
+  if (matchCount) return matchCount;
+  const array = parseJsonArray(trimmed);
+  if (array) return `${array.length} ${array.length === 1 ? "match" : "matches"}`;
+  const firstLine = trimmed.split(/\r?\n/u).find(Boolean);
+  return firstLine ? clipText(firstLine, 48) : null;
+}
+
+function fieldValue(record: Record<string, unknown> | null, keys: string[]): unknown {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return undefined;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number") return String(value);
+  }
+  return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function parseMaybeJson(value: string): unknown {
+  if (!/^[{["0-9tfn-]/u.test(value)) return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function parseJsonArray(value: string): unknown[] | null {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function quoteIfNeeded(value: string): string {
+  return /\s/u.test(value) ? `"${clipText(value, 48)}"` : clipText(value, 48);
+}
+
+function clipText(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
+}
+
+function uniqueNonEmpty(values: Array<string | null>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
 }
 
 function actionLabel(value: string): string {

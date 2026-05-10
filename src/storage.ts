@@ -17,6 +17,7 @@ export interface PersistedSession {
 }
 
 export interface PersistedWorkBlock {
+  eventId?: string;
   label: string;
   detail?: string;
   status?: "started" | "running" | "completed" | "failed";
@@ -332,6 +333,7 @@ function parseWorkBlocks(input: string | undefined): Record<string, PersistedWor
       if (!isRecord(value) || typeof value.label !== "string") continue;
       const code = value.code ? parseCodeBlocks(JSON.stringify({ code: value.code }))?.code : undefined;
       blocks[id] = {
+        ...(typeof value.eventId === "string" ? { eventId: value.eventId } : {}),
         label: value.label,
         ...(typeof value.detail === "string" ? { detail: value.detail } : {}),
         ...(isWorkStatus(value.status) ? { status: value.status } : {}),

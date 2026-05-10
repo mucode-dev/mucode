@@ -59,6 +59,7 @@ export type SessionEvent =
   | { type: "stream"; stream: SessionStreamKind; text: string }
   | {
       type: "work";
+      id?: string;
       label: string;
       detail?: string;
       code?: SessionCodeBlock;
@@ -948,8 +949,13 @@ class CodexAppServerSession {
     if (notification.method === "item/mcpToolCall/progress" && isRecord(notification.params)) {
       const summary =
         stringValue(notification.params, "message") ?? stringValue(notification.params, "summary");
+      const id =
+        stringValue(notification.params, "id") ??
+        stringValue(notification.params, "itemId") ??
+        stringValue(notification.params, "callId");
       this.onEvent({
         type: "work",
+        ...(id ? { id } : {}),
         label: "MCP tool call",
         ...(summary ? { detail: summary } : {}),
         status: "running",
@@ -1034,6 +1040,7 @@ function codexLifecycleWorkEvent(
   ]);
   return {
     type: "work",
+    ...(stringValue(item, "id") ? { id: stringValue(item, "id")! } : {}),
     label,
     ...(detail ? { detail } : {}),
     ...(status === "completed" ? { code: executionBlockFromRecord(item, label) } : {}),
@@ -1044,6 +1051,11 @@ function codexLifecycleWorkEvent(
 function codexToolCallWorkEvent(value: unknown): SessionEvent | null {
   if (!isRecord(value)) return null;
   const tool = isRecord(value.tool) ? value.tool : value;
+  const callId =
+    stringValue(value, "callId") ??
+    stringValue(value, "callID") ??
+    stringValue(value, "requestId") ??
+    stringValue(value, "id");
   const name =
     stringValue(tool, "name") ??
     stringValue(tool, "title") ??
@@ -1060,6 +1072,7 @@ function codexToolCallWorkEvent(value: unknown): SessionEvent | null {
   ]);
   return {
     type: "work",
+    ...(callId ? { id: callId } : {}),
     label: `Tool call: ${name}`,
     ...(detail ? { detail } : {}),
     status: "started",
@@ -1072,7 +1085,7 @@ function codexItemLabel(rawType: string | null): string | null {
   if (type.includes("agent message") || type.includes("assistant") || type.includes("user")) {
     return null;
   }
-  if (type.includes("reasoning") || type.includes("thought")) return "Thinking";
+  if (type.includes("reasoning") || type.includes("thought")) return null;
   if (type.includes("plan") || type.includes("todo")) return "Plan";
   if (type.includes("command")) return "Command";
   if (type.includes("file change") || type.includes("patch") || type.includes("edit")) {
@@ -1431,6 +1444,7 @@ function openCodeToolWorkEvent(part: OpenCodeCliPart): SessionEvent {
   const code = executionBlockFromToolOutput(part.state?.output);
   return {
     type: "work",
+    id: part.callID ?? part.callId ?? part.id,
     label: `Tool call: ${part.state?.title ?? part.tool ?? "unknown"}`,
     ...(code ? { code } : {}),
     detail: code
